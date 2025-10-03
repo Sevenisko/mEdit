@@ -1,0 +1,14 @@
+# CMake-generated files
+build/
+out/
+/Include/Config.h
+
+# VS stuff
+.vs/
+
+# VS Code stuff
+.vscode/
+
+# Output directories
+/[Ll]ib/
+/[Bb]in/

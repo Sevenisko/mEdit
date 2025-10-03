@@ -1,0 +1,49 @@
+101 ICON "mEdit.ico"
+
+#include "Include/Config.h"
+#include <winver.h>
+#include <ntdef.h>
+
+#ifdef RC_INVOKED
+
+#ifdef _DEBUG
+#define VER_DBG VS_FF_DEBUG
+#define VER_IS_DEBUG 1
+#else
+#define VER_DBG 0
+#define VER_IS_DEBUG 0
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,VER_IS_DEBUG
+PRODUCTVERSION  @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,VER_IS_DEBUG
+FILEFLAGSMASK           VS_FFI_FILEFLAGSMASK
+FILEFLAGS               VER_DBG
+FILEOS                  VOS_NT
+FILETYPE                VFT_APP
+FILESUBTYPE             VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "Comments",         "mEdit"
+		    VALUE "CompanyName",      "Sev3n"
+		    VALUE "FileDescription",  "mEdit - Another Mafia editor"
+		    VALUE "FileVersion",      "v@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@"
+		    VALUE "InternalName",     "mEdit Mafia Editor"
+		    VALUE "LegalCopyright",   "©2024 Sev3n"
+		    VALUE "OriginalFilename", "mEdit.exe"
+		    VALUE "ProductName",      "mEdit"
+		    VALUE "ProductVersion",	  "v@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.@PROJECT_VERSION_PATCH@"        
+        END
+    END
+
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+
+    END
+END
+
+#endif
