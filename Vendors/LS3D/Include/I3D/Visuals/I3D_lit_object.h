@@ -94,7 +94,7 @@ class I3D_lit_object : public I3D_object {
     uint8_t GetNumLevels() const {
         uint8_t numLevels = 0;
         for(size_t i = 0; i < 6; ++i) {
-            if(m_sLevels[i].LODs) { numLevels |= 1 << i; }
+            if(m_sLevels[i].active) { numLevels |= 1 << i; }
         }
         return numLevels;
     }
@@ -106,15 +106,19 @@ class I3D_lit_object : public I3D_object {
         }
 
         uint8_t numLevels = GetNumLevels();
-        writer->WriteUInt8(numLevels);
 
         I3D_lit_object* litObject = this;
 
-        if(numLevels == 0) { return I3D_OK; }
+        if(numLevels == 0) {
+            debugPrintf("!! no active levels   I3D_lit_object::Save()  this:0x%x %s", this, GetName());
+            return I3D_OK;
+        }
 
-        for(size_t levelIndex = 0; levelIndex < 7; ++levelIndex) {
+        writer->WriteUInt8(numLevels);
+
+        for(size_t levelIndex = 0; levelIndex < 6; ++levelIndex) {
             const LightmapLevel* level = &m_sLevels[levelIndex];
-            if(!level || !level->LODs) { continue; }
+            if(!level || !level->active) { continue; }
 
             if(!m_pMesh) {
                 debugPrintf("!! no mesh   I3D_lit_object::Save()  this:0x%x %s", this, GetName());
@@ -142,7 +146,7 @@ class I3D_lit_object : public I3D_object {
             writer->Write(&levelHeader, sizeof(LevelHeader));
 
             for(uint32_t lodIndex = 0; lodIndex < m_pMesh->m_uNumLODs; ++lodIndex) {
-                lod& lod = level->LODs[lodIndex];
+                lod* lod = level->LODs[lodIndex];
                 /*if(!lod || !lod->vertexColors || !lod->UVs || !lod->linkCoords || !lod->bitmaps || !lod->faceMaps || !lod->indexBuffer) {
                     debugPrintf("!! invalid LOD data   I3D_lit_object::CustomSave()  this:0x%x %s", this, GetName());
                     return I3DERR_NOTINITIALIZED;
@@ -153,21 +157,21 @@ class I3D_lit_object : public I3D_object {
                 writer->WriteUInt16(meshLod->m_uNumVertices);
 
                 if(level->type == LM_TYPE_VERTEX) {
-                    uint32_t numColors = lod.numColorsOrUVs;
+                    uint32_t numColors = lod->numColorsOrUVs;
                     writer->WriteUInt32(numColors);
-                    if(!lod.vertexColors) {
+                    if(!lod->vertexColors) {
                         debugPrintf("!! error writing data (VertColorList)  I3D_lit_object::Save()  this:0x%x %s  handle:0x%x", this, GetName(), writer);
                         return I3DERR_FILECORRUPTED;
                     }
-                    writer->Write(lod.vertexColors, numColors * sizeof(ColorRGBA));
+                    writer->Write(lod->vertexColors, numColors * sizeof(ColorRGBA));
                 } else if(level->type == LM_TYPE_BITMAP) {
-                    uint16_t numBitmaps = static_cast<uint16_t>(lod.numBitmaps);
+                    uint16_t numBitmaps = static_cast<uint16_t>(lod->numBitmaps);
                     uint16_t numFaceGroups = meshLod->m_uNumFGroups;
 
                     writer->WriteUInt16(numBitmaps);
                     writer->WriteUInt16(numFaceGroups);
 
-                    lod::Bitmap* bitmaps = lod.bitmaps;
+                    lod::Bitmap* bitmaps = lod->bitmaps;
                     for(uint32_t i = 0; i < numBitmaps; ++i) {
                         lod::Bitmap& bitmap = bitmaps[i];
 
@@ -189,39 +193,39 @@ class I3D_lit_object : public I3D_object {
 
                             writer->Write(bitmap.pixels, bitmap.size * sizeof(ColorRGB));
 
-                            delete[] bitmap.pixels;
-                            bitmap.pixels = nullptr;
+                            //delete[] bitmap.pixels;
+                            //bitmap.pixels = nullptr;
                         }
                     }
 
-                    uint32_t numUVs = lod.numColorsOrUVs;
+                    uint32_t numUVs = lod->numColorsOrUVs;
                     writer->WriteUInt32(numUVs);
 
-                    if(!lod.UVs) {
+                    if(!lod->UVs) {
                         debugPrintf("!! error writing data (OrigUV)  I3D_lit_object::Save()  this:0x%x %s  handle:0x%x", this, GetName(), writer);
                         return I3DERR_FILECORRUPTED;
                     }
 
-                    writer->Write(lod.UVs, numUVs * sizeof(S_vector2));
+                    writer->Write(lod->UVs, numUVs * sizeof(S_vector2));
 
-                    if(!lod.linkCoords) {
+                    if(!lod->linkCoords) {
                         debugPrintf("!! error writing data (VertInfo)  I3D_lit_object::Save()  this:0x%x %s  handle:0x%x", this, GetName(), writer);
                         return I3DERR_FILECORRUPTED;
                     }
 
-                    writer->Write(lod.linkCoords, numUVs * sizeof(lod::LinkCoord));
+                    writer->Write(lod->linkCoords, numUVs * sizeof(lod::LinkCoord));
 
                     uint32_t numIndices = 3 * meshLod->NumFaces();
                     writer->WriteUInt32(numIndices);
 
-                    if(!lod.indexBuffer) {
+                    if(!lod->indexBuffer) {
                         debugPrintf("!! error writing data (FaceList)  I3D_lit_object::Save()  this:0x%x %s  handle:0x%x", this, GetName(), writer);
                         return I3DERR_FILECORRUPTED;
                     }
 
-                    writer->Write(lod.indexBuffer, numIndices * sizeof(uint16_t));
+                    writer->Write(lod->indexBuffer, numIndices * sizeof(uint16_t));
 
-                    const lod::FaceMap* faceMaps = lod.faceMaps;
+                    const lod::FaceMap* faceMaps = lod->faceMaps;
                     for(uint32_t i = 0; i < numFaceGroups; ++i) {
                         uint32_t numFaces = meshLod->GetFGroup(i)->numFaces;
                         writer->WriteUInt32(numFaces);
@@ -244,12 +248,11 @@ class I3D_lit_object : public I3D_object {
   private:
     uint32_t unk;
     struct LightmapLevel {
-        uint32_t unk;
+        bool active;
+        uint8_t pad[3];
         uint32_t type;
         float texelsPerUnit;
         float range;
-        lod* LODs;
-        uint8_t unk2;
-        uint8_t pad[32];
+        lod* LODs[10];
     } m_sLevels[6];
 };

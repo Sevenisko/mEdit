@@ -996,11 +996,6 @@ bool SceneEditor::Init() {
 bool SceneEditor::IsInit() const { return m_IGraph->IsInit(); }
 
 void SceneEditor::DrawWireframeBox(const I3D_bbox& bbox, const S_vector& color, uint8_t alpha) {
-    /*S_matrix mat;
-    mat.Identity();
-
-    m_IGraph->SetWorldMatrix(mat);*/
-
     // Bottom face
     m_3DDriver->DrawLine({bbox.min.x, bbox.min.y, bbox.min.z}, {bbox.max.x, bbox.min.y, bbox.min.z}, color, alpha);
 
@@ -4099,14 +4094,16 @@ uint8_t SetBitsFromCount(uint8_t count) {
 }
 
 void SceneEditor::WriteFrame(I3D_frame* frame, ChunkWriter& chunk, bool forceWrite) {
+    bool created = std::find(m_CreatedFrames.begin(), m_CreatedFrames.end(), frame) != m_CreatedFrames.end();
+
     if(std::find(m_Frames.begin(), m_Frames.end(), frame) != m_Frames.end() || forceWrite) {
         chunk += CT_MODIFICATION;
         {
-            chunk.WriteUIntChunk(CT_FRAME_TYPE, frame->GetType());
+            if(created) { chunk.WriteUIntChunk(CT_FRAME_TYPE, frame->GetType()); }
 
             I3D_visual* visual = (I3D_visual*)frame;
 
-            if(frame->GetType() == FRAME_VISUAL) {
+            if(frame->GetType() == FRAME_VISUAL && created) {
                 chunk.WriteUIntChunk(CT_FRAME_SUBTYPE, visual->GetVisualType() == VISUAL_LIT_OBJECT ? VISUAL_OBJECT : visual->GetVisualType());
             }
 
@@ -4131,16 +4128,13 @@ void SceneEditor::WriteFrame(I3D_frame* frame, ChunkWriter& chunk, bool forceWri
                 --chunk;
             }
 
-            if(frame->GetType() == FRAME_MODEL) { chunk.WriteStringChunk(CT_MODIFY_MODELFILENAME, g_ModelsMap[(I3D_model*)frame]); }
+            if(frame->GetType() == FRAME_MODEL && created) { chunk.WriteStringChunk(CT_MODIFY_MODELFILENAME, g_ModelsMap[(I3D_model*)frame]); }
 
             if(frame->GetType() == FRAME_VISUAL) {
                 chunk.WriteUIntChunk(CT_MODIFY_VISUAL, visual->GetVisualType());
 
                 if(visual->GetVisualType() == VISUAL_LIT_OBJECT) {
-                    // NOTE: I'm sick and tired of this reversing shit - leaving disabled until further notice
-                    #if 0
                     I3D_lit_object* obj = (I3D_lit_object*)visual;
-                    // NOTE: Find out why the fuck it ain't writin'
                     chunk += CT_MODIFY_LIT_OBJECT;
                     {
                         if(I3D_FAIL(obj->CustomSave(chunk.GetWriter()))) {
@@ -4149,7 +4143,6 @@ void SceneEditor::WriteFrame(I3D_frame* frame, ChunkWriter& chunk, bool forceWri
                         }
                         --chunk;
                     }
-                    #endif
                 }
             }
 
@@ -4166,6 +4159,7 @@ void SceneEditor::WriteFrame(I3D_frame* frame, ChunkWriter& chunk, bool forceWri
                     chunk.WriteVec2Chunk(CT_LIGHT_CONE, {nearRange, farRange});
                     light->GetRange(nearRange, farRange);
                     chunk.WriteVec2Chunk(CT_LIGHT_RANGE, {nearRange, farRange});
+                    chunk.WriteVec3Chunk(CT_COLOR, light->GetColor());
                     chunk.WriteUIntChunk(CT_LIGHT_MODE, light->GetMode());
 
                     for(int i = light->NumLightSectors(); i--;) {
