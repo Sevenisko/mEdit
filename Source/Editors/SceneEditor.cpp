@@ -21,308 +21,27 @@
 #include <Game/Actors/Enemy.h>
 #include <Game/Actors/Physical.h>
 
+#include <Utils/ImGuiUtils.h>
+#include <Utils/WinUtils.h>
+
 #include <imgui_stdlib.h>
 #include <imgui_impl_dx8.h>
 #include <imgui_impl_dinput.h>
 #include <imgui_impl_win32.h>
+
 #include <FileDialog.hpp>
 
 #include <Config.h>
 
 #define GAME_FOV 1.22173f
 
-namespace ImGui {
-    void InputUInt8(const char* label, uint8_t* value, int step = 1, int step_fast = 10, ImGuiInputTextFlags flags = 0) {
-        int temp = static_cast<int>(*value);
-
-        if(ImGui::InputInt(label, &temp, step, step_fast, flags)) {
-            if(temp < 0) temp = 0;
-            if(temp > 255) temp = 255;
-            *value = static_cast<uint8_t>(temp);
-        }
-    }
-
-    void InputUInt16(const char* label, uint16_t* value, int step = 1, int step_fast = 10, ImGuiInputTextFlags flags = 0) {
-        int temp = static_cast<int>(*value);
-
-        if(ImGui::InputInt(label, &temp, step, step_fast, flags)) {
-            if(temp < 0) temp = 0;
-            if(temp > UINT16_MAX) temp = UINT16_MAX;
-            *value = static_cast<uint16_t>(temp);
-        }
-    }
-} // namespace ImGui
-
 std::map<I3D_sound*, std::string> g_SoundsMap;
 std::map<I3D_model*, std::string> g_ModelsMap;
-
-#define SPEED_MPH_TO_KMH(input) input * 0.621371f
-#define SPEED_KMH_TO_MPH(input) input / 0.621371f
-
-#define SPEED_GAME_TO_KMH(input) input * 3.0f
-#define SPEED_GAME_TO_MPH(input) SPEED_KMH_TO_MPH(SPEED_GAME_TO_KMH(input))
-
-#define SPEED_KMH_TO_GAME(input) input / 3.0f
-#define SPEED_MPH_TO_GAME(input) SPEED_KMH_TO_GAME(SPEED_MPH_TO_KMH(input))
-
-float NormalizeAngle(float angle) {
-    while(angle < -360.0f)
-        angle += 360.0f;
-    while(angle > 360.0f)
-        angle -= 360.0f;
-    return angle;
-}
-
-double LerpAngle(double start, double end, double t) {
-    start = NormalizeAngle(start);
-    end = NormalizeAngle(end);
-    double delta = end - start;
-
-    if(abs(delta) > 180.0) {
-        if(delta > 0) {
-            start += 360.0;
-        } else {
-            end += 360.0;
-        }
-    }
-
-    double result = start + t * (end - start);
-    return NormalizeAngle(result);
-}
-
-float Lerpf(float start, float end, float t) { return start + t * (end - start); }
-
-S_vector LerpVec(const S_vector& start, const S_vector& end, float t) {
-    return S_vector(Lerpf(start.x, end.x, t), Lerpf(start.y, end.y, t), Lerpf(start.z, end.z, t));
-}
-
-S_vector EulerFromDir(const S_vector& dir) {
-    S_vector euler;
-
-    float hyp = sqrtf(dir.x * dir.x + dir.z * dir.z);
-    euler.y = Degrees(atan2f(-dir.y, hyp));
-
-    euler.x = Degrees(atan2f(dir.x, dir.z));
-
-    return euler;
-}
-
-S_vector DirFromEuler(const S_vector& euler) {
-    S_vector dir;
-
-    float yawRad = Radians(euler.x);
-    float pitchRad = Radians(euler.y);
-
-    dir.x = cosf(pitchRad) * sinf(yawRad);
-    dir.y = sinf(pitchRad);
-    dir.z = cosf(pitchRad) * cosf(yawRad);
-
-    return dir;
-}
-
-S_vector EulerFromQuat(const S_quat& rot) {
-    S_vector euler;
-
-    // Roll (x-axis rotation)
-    float sinr_cosp = 2.0f * (rot.w * rot.x + rot.y * rot.z);
-    float cosr_cosp = 1.0f - 2.0f * (rot.x * rot.x + rot.y * rot.y);
-    euler.x = atan2f(sinr_cosp, cosr_cosp);
-
-    // Pitch (y-axis rotation)
-    float sinp = 2.0f * (rot.w * rot.y - rot.z * rot.x);
-    if(I3DFabs(sinp) >= 1.0f - MRG_ZERO) {
-        euler.y = copysignf(PI / 2.0f, sinp); // Handle singularity at �90 degrees
-    } else {
-        euler.y = asinf(sinp);
-    }
-
-    // Yaw (z-axis rotation)
-    float siny_cosp = 2.0f * (rot.w * rot.z + rot.x * rot.y);
-    float cosy_cosp = 1.0f - 2.0f * (rot.y * rot.y + rot.z * rot.z);
-    euler.z = atan2f(siny_cosp, cosy_cosp);
-
-    // Convert radians to degrees
-    euler.x = euler.x * 180.0f / PI;
-    euler.y = euler.y * 180.0f / PI;
-    euler.z = euler.z * 180.0f / PI;
-
-    return euler;
-}
-
-S_quat QuatFromEuler(const S_vector& euler) {
-    // Convert degrees to radians
-    float roll = euler.x * PI / 180.0f;
-    float pitch = euler.y * PI / 180.0f;
-    float yaw = euler.z * PI / 180.0f;
-
-    // Half angles for quaternion math
-    float cy = cosf(yaw * 0.5f);
-    float sy = sinf(yaw * 0.5f);
-    float cp = cosf(pitch * 0.5f);
-    float sp = sinf(pitch * 0.5f);
-    float cr = cosf(roll * 0.5f);
-    float sr = sinf(roll * 0.5f);
-
-    S_quat quat;
-    quat.w = cy * cp * cr + sy * sp * sr;
-    quat.x = cy * cp * sr - sy * sp * cr;
-    quat.y = sy * cp * sr + cy * sp * cr;
-    quat.z = sy * cp * cr - cy * sp * sr;
-
-    // Normalize to prevent drift
-    float mag = sqrtf(quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z);
-    if(mag > MRG_ZERO) {
-        quat.w /= mag;
-        quat.x /= mag;
-        quat.y /= mag;
-        quat.z /= mag;
-    } else {
-        quat = S_quat(); // Return identity quaternion if magnitude is too small
-    }
-
-    return quat;
-}
-
-void ExtractTransformComponents(const S_matrix* matrix, S_vector* translation, S_vector* rotation, S_vector* scale) {
-    if(!matrix) return;
-
-    // Extract translation (m_41, m_42, m_43)
-    if(translation) {
-        translation->x = matrix->m_41;
-        translation->y = matrix->m_42;
-        translation->z = matrix->m_43;
-    }
-
-    // Extract scale (length of first three columns)
-    if(scale) {
-        S_vector col1(matrix->m_11, matrix->m_21, matrix->m_31);
-        S_vector col2(matrix->m_12, matrix->m_22, matrix->m_32);
-        S_vector col3(matrix->m_13, matrix->m_23, matrix->m_33);
-        scale->x = static_cast<float>(col1.Magnitude());
-        scale->y = static_cast<float>(col2.Magnitude());
-        scale->z = static_cast<float>(col3.Magnitude());
-
-        // Handle near-zero scales to avoid division by zero
-        if(scale->x < MRG_ZERO) scale->x = 1.0f;
-        if(scale->y < MRG_ZERO) scale->y = 1.0f;
-        if(scale->z < MRG_ZERO) scale->z = 1.0f;
-    }
-
-    // Extract rotation (convert to quaternion, then to Euler angles)
-    if(rotation) {
-        // Remove scale to get rotation matrix
-        S_matrix rotMat = *matrix;
-        if(scale) {
-            rotMat.m_11 /= scale->x;
-            rotMat.m_21 /= scale->x;
-            rotMat.m_31 /= scale->x;
-            rotMat.m_12 /= scale->y;
-            rotMat.m_22 /= scale->y;
-            rotMat.m_32 /= scale->y;
-            rotMat.m_13 /= scale->z;
-            rotMat.m_23 /= scale->z;
-            rotMat.m_33 /= scale->z;
-        }
-
-        // Convert to quaternion
-        S_quat quat;
-        quat.Make(rotMat);
-
-        // Convert quaternion to Euler angles (degrees)
-        float sinr_cosp = 2.0f * (quat.w * quat.x + quat.y * quat.z);
-        float cosr_cosp = 1.0f - 2.0f * (quat.x * quat.x + quat.y * quat.y);
-        rotation->x = atan2f(sinr_cosp, cosr_cosp) * 180.0f / PI; // Roll
-
-        float sinp = 2.0f * (quat.w * quat.y - quat.z * quat.x);
-        if(I3DFabs(sinp) >= 1.0f - MRG_ZERO) {
-            rotation->y = copysignf(PI / 2.0f, sinp) * 180.0f / PI; // Pitch
-        } else {
-            rotation->y = asinf(sinp) * 180.0f / PI;
-        }
-
-        float siny_cosp = 2.0f * (quat.w * quat.z + quat.x * quat.y);
-        float cosy_cosp = 1.0f - 2.0f * (quat.y * quat.y + quat.z * quat.z);
-        rotation->z = atan2f(siny_cosp, cosy_cosp) * 180.0f / PI; // Yaw
-    }
-}
-
-void PackTransformComponents(S_matrix* matrix, const S_vector* translation, const S_vector* rotation, const S_vector* scale) {
-    if(!matrix) return;
-
-    // Start with identity matrix
-    matrix->Identity();
-
-    // Apply rotation (from Euler angles to quaternion to matrix)
-    if(rotation) {
-        // Convert Euler angles (degrees) to quaternion
-        float roll = rotation->x * PI / 180.0f;
-        float pitch = rotation->y * PI / 180.0f;
-        float yaw = rotation->z * PI / 180.0f;
-
-        float cy = cosf(yaw * 0.5f);
-        float sy = sinf(yaw * 0.5f);
-        float cp = cosf(pitch * 0.5f);
-        float sp = sinf(pitch * 0.5f);
-        float cr = cosf(roll * 0.5f);
-        float sr = sinf(roll * 0.5f);
-
-        S_quat quat;
-        quat.w = cy * cp * cr + sy * sp * sr;
-        quat.x = cy * cp * sr - sy * sp * cr;
-        quat.y = sy * cp * sr + cy * sp * cr;
-        quat.z = sy * cp * cr - cy * sp * sr;
-
-        // Normalize quaternion
-        float mag = sqrtf(quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z);
-        if(mag > MRG_ZERO) {
-            quat.w /= mag;
-            quat.x /= mag;
-            quat.y /= mag;
-            quat.z /= mag;
-        }
-
-        // Convert quaternion to rotation matrix
-        matrix->SetRot(quat);
-    }
-
-    // Apply scale
-    if(scale) {
-        matrix->m_11 *= scale->x;
-        matrix->m_12 *= scale->y;
-        matrix->m_13 *= scale->z;
-        matrix->m_21 *= scale->x;
-        matrix->m_22 *= scale->y;
-        matrix->m_23 *= scale->z;
-        matrix->m_31 *= scale->x;
-        matrix->m_32 *= scale->y;
-        matrix->m_33 *= scale->z;
-    }
-
-    // Apply translation
-    if(translation) {
-        matrix->m_41 = translation->x;
-        matrix->m_42 = translation->y;
-        matrix->m_43 = translation->z;
-    }
-}
 
 static WNDPROC g_OriginalWndProc = NULL;
 static WNDPROC g_OriginalChildWndProc = NULL;
 
 static bool g_ChangesMade = false;
-
-static void NonCollapsingHeader(const char* label) {
-    using namespace ImGui;
-    PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
-    PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
-    PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_Header));
-    PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_Header));
-    Button(label, ImVec2(-FLT_MIN, 0.0f));
-    ImGuiStyle& style = ImGui::GetStyle();
-    ImVec2 arrow_pos = ImVec2(GetItemRectMax().x - style.FramePadding.x - GetFontSize(), GetItemRectMin().y + style.FramePadding.y);
-    PopStyleVar();
-    PopStyleColor(3);
-}
 
 std::string OpenFileDialog(FileDialog::Mode mode, const std::string& title, const std::vector<FileDialog::Filter>& filters) {
     FileDialog dialog(mode, title, filters);
@@ -331,6 +50,23 @@ std::string OpenFileDialog(FileDialog::Mode mode, const std::string& title, cons
     }
 
     return "";
+}
+
+std::string ProcessFileName(const std::string& path, const std::string& newExt) {
+    // Find the last directory separator
+    size_t lastSlash = path.find_last_of("\\/");
+    // Extract filename (including extension)
+    std::string filename = (lastSlash == std::string::npos) ? path : path.substr(lastSlash + 1);
+
+    // Find the last dot to locate the extension
+    size_t lastDot = filename.find_last_of('.');
+    if(lastDot == std::string::npos) {
+        // No extension found, just append new extension
+        return filename + '.' + newExt;
+    }
+
+    // Replace extension
+    return filename.substr(0, lastDot + 1) + newExt;
 }
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -349,23 +85,6 @@ LRESULT CALLBACK EditorChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
 
     return CallWindowProc(g_OriginalChildWndProc, hwnd, msg, wParam, lParam);
-}
-
-std::string ProcessFileName(const std::string& path, const std::string& newExt) {
-    // Find the last directory separator
-    size_t lastSlash = path.find_last_of("\\/");
-    // Extract filename (including extension)
-    std::string filename = (lastSlash == std::string::npos) ? path : path.substr(lastSlash + 1);
-
-    // Find the last dot to locate the extension
-    size_t lastDot = filename.find_last_of('.');
-    if(lastDot == std::string::npos) {
-        // No extension found, just append new extension
-        return filename + '.' + newExt;
-    }
-
-    // Replace extension
-    return filename.substr(0, lastDot + 1) + newExt;
 }
 
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -562,187 +281,6 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
 
     return CallWindowProc(g_OriginalWndProc, hwnd, msg, wParam, lParam);
-}
-
-HICON CreateIconFromPNG(const char* filename, int iconWidth, int iconHeight) {
-    unsigned char* image = NULL;
-    unsigned width, height;
-    unsigned error = lodepng_decode32_file(&image, &width, &height, filename);
-    if(error) {
-        debugPrintf("LodePNG error %u: %s\n", error, lodepng_error_text(error));
-        return NULL;
-    }
-
-    // Resize if necessary (simple nearest-neighbor for simplicity)
-    unsigned char* resizedImage = NULL;
-    if(width != (unsigned)iconWidth || height != (unsigned)iconHeight) {
-        resizedImage = (unsigned char*)malloc(iconWidth * iconHeight * 4);
-        if(!resizedImage) {
-            free(image);
-            debugPrintf("Failed to allocate resized image\n");
-            return NULL;
-        }
-
-        // Basic scaling (nearest-neighbor)
-        for(int y = 0; y < iconHeight; y++) {
-            for(int x = 0; x < iconWidth; x++) {
-                int srcX = (x * width) / iconWidth;
-                int srcY = (y * height) / iconHeight;
-                int srcIndex = (srcY * width + srcX) * 4;
-                int dstIndex = (y * iconWidth + x) * 4;
-                resizedImage[dstIndex + 0] = image[srcIndex + 0]; // R
-                resizedImage[dstIndex + 1] = image[srcIndex + 1]; // G
-                resizedImage[dstIndex + 2] = image[srcIndex + 2]; // B
-                resizedImage[dstIndex + 3] = image[srcIndex + 3]; // A
-            }
-        }
-        free(image);
-        image = resizedImage;
-        width = iconWidth;
-        height = iconHeight;
-    }
-
-    // Create HBITMAP for color data (32-bit ARGB)
-    BITMAPINFO bmi = {0};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = iconWidth;
-    bmi.bmiHeader.biHeight = -iconHeight; // Top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    HDC hdcScreen = GetDC(NULL);
-    void* bitmapBits = NULL;
-    HBITMAP hBitmap = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &bitmapBits, NULL, 0);
-    if(!hBitmap) {
-        debugPrintf("Failed to create HBITMAP\n");
-        free(image);
-        ReleaseDC(NULL, hdcScreen);
-        return NULL;
-    }
-
-    // Copy RGBA to ARGB (swap R and B, include alpha)
-    unsigned char* dst = (unsigned char*)bitmapBits;
-    for(unsigned i = 0; i < width * height; i++) {
-        dst[i * 4 + 0] = image[i * 4 + 2]; // B
-        dst[i * 4 + 1] = image[i * 4 + 1]; // G
-        dst[i * 4 + 2] = image[i * 4 + 0]; // R
-        dst[i * 4 + 3] = image[i * 4 + 3]; // A
-    }
-
-    // Create monochrome mask bitmap
-    HBITMAP hMask = CreateBitmap(iconWidth, iconHeight, 1, 1, NULL);
-    if(!hMask) {
-        debugPrintf("Failed to create mask bitmap\n");
-        DeleteObject(hBitmap);
-        free(image);
-        ReleaseDC(NULL, hdcScreen);
-        return NULL;
-    }
-
-    // Generate mask (alpha < 128 = transparent)
-    HDC hdcColor = CreateCompatibleDC(hdcScreen);
-    HDC hdcMask = CreateCompatibleDC(hdcScreen);
-    SelectObject(hdcColor, hBitmap);
-    SelectObject(hdcMask, hMask);
-    for(int y = 0; y < iconHeight; y++) {
-        for(int x = 0; x < iconWidth; x++) {
-            unsigned index = (y * iconWidth + x) * 4;
-            BYTE alpha = image[index + 3];
-            SetPixel(hdcMask, x, y, alpha < 128 ? RGB(255, 255, 255) : RGB(0, 0, 0));
-        }
-    }
-
-    // Create ICONINFO structure
-    ICONINFO iconInfo = {0};
-    iconInfo.fIcon = TRUE; // Icon, not cursor
-    iconInfo.xHotspot = 0;
-    iconInfo.yHotspot = 0;
-    iconInfo.hbmMask = hMask;
-    iconInfo.hbmColor = hBitmap;
-
-    // Create HICON
-    HICON hIcon = CreateIconIndirect(&iconInfo);
-
-    // Clean up
-    DeleteDC(hdcColor);
-    DeleteDC(hdcMask);
-    ReleaseDC(NULL, hdcScreen);
-    DeleteObject(hBitmap);
-    DeleteObject(hMask);
-    free(image);
-
-    if(!hIcon) { debugPrintf("Failed to create HICON\n"); }
-
-    return hIcon;
-}
-
-struct MenuItem {
-    std::string label;
-    UINT id;
-    bool isSubmenu;
-    bool isEnabled;
-    bool isChecked;
-    bool isSeparator;
-    HMENU submenu;
-};
-
-void ExtractMenuItems(HMENU hMenu, std::vector<MenuItem>& items) {
-    int count = GetMenuItemCount(hMenu);
-    for(int i = 0; i < count; ++i) {
-        MENUITEMINFOA mii = {sizeof(MENUITEMINFOA)};
-        mii.fMask = MIIM_STRING | MIIM_ID | MIIM_STATE | MIIM_SUBMENU | MIIM_FTYPE; // Use MIIM_TYPE for compatibility
-        mii.dwTypeData = nullptr;
-
-        // Get required buffer size for menu item text
-        if(!GetMenuItemInfoA(hMenu, i, TRUE, &mii)) { continue; }
-
-        std::vector<char> buffer(mii.cch + 1);
-        mii.dwTypeData = buffer.data();
-        mii.cch = buffer.size();
-
-        if(!GetMenuItemInfoA(hMenu, i, TRUE, &mii)) { continue; }
-
-        MenuItem item;
-        item.label = mii.dwTypeData ? mii.dwTypeData : "";
-        item.id = mii.wID;
-        item.isSubmenu = (mii.hSubMenu != nullptr);
-        item.isEnabled = !(mii.fState & MFS_DISABLED);
-        item.isChecked = (mii.fState & MFS_CHECKED);
-        item.isSeparator = (mii.fType & MFT_SEPARATOR) != 0; // Primary check for separator
-        item.submenu = mii.hSubMenu;
-
-        // Fallback check for separators: no label and no ID
-        if(!item.isSeparator && item.label.empty() && item.id == 0 && !item.isSubmenu) { item.isSeparator = true; }
-
-        items.push_back(item);
-    }
-}
-
-void BuildImGuiMenu(const std::vector<MenuItem>& items, HWND hWnd) {
-    for(const auto& item: items) {
-        if(item.isSubmenu && item.submenu) {
-            if(ImGui::BeginMenu(item.label.c_str())) {
-                std::vector<MenuItem> subItems;
-                ExtractMenuItems(item.submenu, subItems);
-                BuildImGuiMenu(subItems, hWnd);
-                ImGui::EndMenu();
-            }
-        } else if(item.isSeparator) {
-            ImGui::Separator();
-        } else {
-            if(ImGui::MenuItem(item.label.c_str(), nullptr, item.isChecked, item.isEnabled)) { PostMessage(hWnd, WM_COMMAND, item.id, 0); }
-        }
-    }
-}
-
-void RenderMenuBarFromHMENU(HMENU hMenu, HWND hWnd) {
-    if(ImGui::BeginMainMenuBar()) {
-        std::vector<MenuItem> items;
-        ExtractMenuItems(hMenu, items);
-        BuildImGuiMenu(items, hWnd);
-        ImGui::EndMainMenuBar();
-    }
 }
 
 std::vector<I3D_frame*> IterateChildFrames(I3D_frame* frame) {
@@ -1150,10 +688,10 @@ float CalculateHorizontalFOV(float aspectRatio) {
     const int numPoints = sizeof(points) / sizeof(points[0]);
 
     // If aspect ratio is below the minimum, return 80 degrees
-    if(aspectRatio <= points[0][0]) { return Radians(80.0f); }
+    if(aspectRatio <= points[0][0]) { return RAD(80.0f); }
 
     // If aspect ratio is above the maximum, return 150 degrees
-    if(aspectRatio >= points[numPoints - 1][0]) { return Radians(150.0f); }
+    if(aspectRatio >= points[numPoints - 1][0]) { return RAD(150.0f); }
 
     // Find the two points to interpolate between
     for(int i = 0; i < numPoints - 1; ++i) {
@@ -1162,12 +700,12 @@ float CalculateHorizontalFOV(float aspectRatio) {
             float x2 = points[i + 1][0], y2 = points[i + 1][1];
 
             // Linear interpolation: y = y1 + (y2 - y1)/(x2 - x1) * (x - x1)
-            return Radians((y1 + (y2 - y1) / (x2 - x1) * (aspectRatio - x1)));
+            return RAD((y1 + (y2 - y1) / (x2 - x1) * (aspectRatio - x1)));
         }
     }
 
     // Fallback (should not reach here due to above checks)
-    return Radians(90.0f);
+    return RAD(90.0f);
 }
 
 float CalculateCameraFOV(float horizontalFOV, float aspectRatio) { return 2.0f * atanf(tanf(horizontalFOV / 2.0f) / aspectRatio); }
@@ -1344,12 +882,6 @@ bool SceneEditor::Init() {
 
         m_IGraph->MouseInit(0);
 
-        /*m_IGraph->KeyboardInit(0);
-		m_IGraph->MouseInit(0);
-
-		m_KeyboardDevice = *(IDirectInputDevice8A**)(0x101C5434);
-		m_MouseDevice = *(IDirectInputDevice8A**)(0x101C595C);*/
-
         ls3df = GetModuleHandleA("LS3DF.dll");
 
         if(ls3df) {
@@ -1373,7 +905,7 @@ bool SceneEditor::Init() {
         float camFOV = CalculateCameraFOV(horizontalFOV, aspectRatio);
 
         m_Camera->SetFOV(camFOV);
-        //m_Camera->SetNearFOV(Radians(115));
+        //m_Camera->SetNearFOV(RAD(115));
         m_Camera->SetRange(0.01f, 8000.0f);
 
         m_ImGuiContext = ImGui::CreateContext();
@@ -1973,7 +1505,7 @@ void SceneEditor::Update() {
         }
     }
 
-    if(g_Editor->GetSettings()->video.fullscreen) { RenderMenuBarFromHMENU(m_MenuBar, m_IGraph->GetMainHWND()); }
+    if(g_Editor->GetSettings()->video.fullscreen) { ImGui::RenderMainMenuBar(m_MenuBar, m_IGraph->GetMainHWND()); }
 
     m_ScriptEditor.Render();
 
@@ -2200,7 +1732,7 @@ void SceneEditor::Update() {
         switch(m_SelectionType) {
         case SEL_PART: {
             if(m_SelectedCityPart) {
-                NonCollapsingHeader("City Part");
+                ImGui::NonCollapsingHeader("City Part");
                 ImGui::Text("Frame: %s", m_SelectedCityPart->frame ? m_SelectedCityPart->frame->GetName() : "None");
                 if(m_SelectedCityPart->frame) {
                     ImGui::SameLine();
@@ -2210,7 +1742,7 @@ void SceneEditor::Update() {
         } break;
         case SEL_WAYPOINT: {
             if(m_SelectedWaypoint) {
-                NonCollapsingHeader("Waypoint");
+                ImGui::NonCollapsingHeader("Waypoint");
                 ImGui::DragFloat3("Position", &m_SelectedWaypoint->pos.x, 0.25f);
                 ImGui::DragFloat("Speed", &m_SelectedWaypoint->speed, 0.25f, 0, 1000, "%.1f km/h");
 
@@ -2378,7 +1910,7 @@ void SceneEditor::Update() {
         } break;
         case SEL_CROSSPOINT: {
             if(m_SelectedCrosspoint) {
-                NonCollapsingHeader("Crosspoint");
+                ImGui::NonCollapsingHeader("Crosspoint");
                 ImGui::DragFloat3("Position", &m_SelectedCrosspoint->pos.x, 0.25f);
                 ImGui::Checkbox("Has semaphore", &m_SelectedCrosspoint->hasSemaphore);
                 ImGui::DragFloat("Speed", &m_SelectedCrosspoint->speed, 0.25f, 0, 1000, "%.1f km/h");
@@ -2525,7 +2057,7 @@ void SceneEditor::Update() {
         }
         case SEL_NODE: {
             if(m_SelectedNode) {
-                NonCollapsingHeader("Web Node");
+                ImGui::NonCollapsingHeader("Web Node");
 
                 static int selType = 0;
 
@@ -2672,7 +2204,7 @@ void SceneEditor::Update() {
         } break;
         case SEL_FRAME: {
             if(m_SelectedFrame) {
-                NonCollapsingHeader("Frame");
+                ImGui::NonCollapsingHeader("Frame");
                 if(m_SelectedFrame == m_PrimarySector || m_SelectedFrame == m_BackdropSector) {
                     ImGui::Text("Name: %s", m_SelectedFrameName);
                 } else {
@@ -2695,7 +2227,7 @@ void SceneEditor::Update() {
                     validModel = m_SelectedFrame->m_pSzModelName && (strlen(m_SelectedFrame->m_pSzModelName) > 0);
                     I3D_model* model = (I3D_model*)m_SelectedFrame;
 
-                    NonCollapsingHeader("Model");
+                    ImGui::NonCollapsingHeader("Model");
 
                     ImGui::Text("File: %s", g_ModelsMap[model].c_str());
                     ImGui::SameLine();
@@ -2733,7 +2265,7 @@ void SceneEditor::Update() {
                     m_IGraph->SetWorldMatrix(light->m_mWorldMat);
                     m_3DDriver->DrawSprite(m_SelectedFramePos, m_LightIconMaterial, 0, 1.0f);
 
-                    NonCollapsingHeader("Light");
+                    ImGui::NonCollapsingHeader("Light");
 
                     static I3D_LIGHTTYPE type;
                     static S_vector color;
@@ -2747,8 +2279,8 @@ void SceneEditor::Update() {
                     power = light->GetPower();
                     mode = light->GetMode();
                     light->GetCone(angle.x, angle.y);
-                    angle.x = Degrees(angle.x);
-                    angle.y = Degrees(angle.y);
+                    angle.x = DEG(angle.x);
+                    angle.y = DEG(angle.y);
 
                     light->GetRange(range.x, range.y);
                     if(selectedLightIndex != (light->GetLightType() - 1)) { selectedLightIndex = (light->GetLightType() - 1); }
@@ -2779,7 +2311,7 @@ void SceneEditor::Update() {
                     if(ImGui::DragFloat("Power", &power, 0.25f)) { light->SetPower(power); }
                     if(ImGui::InputInt("Mode", (int*)&mode, 1, 1)) { light->SetMode(mode); }
                     if(ImGui::DragFloat2("Range", &range.x, 0.25f)) { light->SetRange(range.x, range.y); }
-                    if(ImGui::DragFloat2("Cone angle", &angle.x, 0.25f)) { light->SetCone(Radians(angle.x), Radians(angle.y)); }
+                    if(ImGui::DragFloat2("Cone angle", &angle.x, 0.25f)) { light->SetCone(RAD(angle.x), RAD(angle.y)); }
 
                     ImGui::Text("Sectors");
                     ImGui::SameLine();
@@ -2813,7 +2345,7 @@ void SceneEditor::Update() {
                     m_IGraph->SetWorldMatrix(sound->m_mWorldMat);
                     m_3DDriver->DrawSprite(m_SelectedFramePos, m_SoundIconMaterial, 0, 1.0f);
 
-                    NonCollapsingHeader("Sound");
+                    ImGui::NonCollapsingHeader("Sound");
 
                     static I3D_SOUNDTYPE type;
                     static std::string fileName;
@@ -2828,8 +2360,8 @@ void SceneEditor::Update() {
                     fileName = g_SoundsMap[sound];
                     sound->GetRange(radius.x, radius.y, falloff.x, falloff.y);
                     sound->GetCone(cone.x, cone.y);
-                    cone.x = Degrees(cone.x);
-                    cone.y = Degrees(cone.y);
+                    cone.x = DEG(cone.x);
+                    cone.y = DEG(cone.y);
                     volume = sound->GetVolume();
                     outVolume = sound->GetOutVol();
                     loop = sound->IsLoop();
@@ -2874,7 +2406,7 @@ void SceneEditor::Update() {
 
                     if(ImGui::DragFloat2("Radius", &radius.x, 0.25f)) { sound->SetRange(radius.x, radius.y, falloff.x, falloff.y); }
                     if(ImGui::DragFloat2("Falloff", &falloff.x, 0.025f)) { sound->SetRange(radius.x, radius.y, falloff.x, falloff.y); }
-                    if(ImGui::DragFloat2("Cone", &cone.x, 0.25f)) { sound->SetCone(Radians(cone.x), Radians(cone.y)); }
+                    if(ImGui::DragFloat2("Cone", &cone.x, 0.25f)) { sound->SetCone(RAD(cone.x), RAD(cone.y)); }
                     if(ImGui::SliderFloat("Volume", &volume, 0, 1)) { sound->SetVolume(volume); }
                     if(ImGui::SliderFloat("Out Volume", &outVolume, 0, 1)) { sound->SetOutVol(outVolume); }
                     if(ImGui::Checkbox("Loop", &loop)) { sound->SetLoop(loop); }
@@ -2906,7 +2438,7 @@ void SceneEditor::Update() {
 
                 Actor* actor = GetActor(m_SelectedFrame);
                 if(actor) {
-                    NonCollapsingHeader("Actor");
+                    ImGui::NonCollapsingHeader("Actor");
                     ImGui::Text("Type: %s", g_ActorTypeString[actor->GetType()].c_str());
                     actor->OnInspectorGUI();
                 }
@@ -4038,7 +3570,7 @@ bool SceneEditor::LoadRoadBin(const std::string& fileName) {
                 link.crosspointLink = reader.ReadUInt16();
                 link.unk1 = reader.ReadUInt16();
                 link.distance = reader.ReadSingle();
-                link.angle = Degrees(reader.ReadSingle());
+                link.angle = DEG(reader.ReadSingle());
                 link.unk2 = reader.ReadUInt16();
                 link.priority = reader.ReadUInt32();
                 link.unk3 = reader.ReadUInt16();
@@ -4817,7 +4349,7 @@ void SceneEditor::WriteRoadBin(const std::string& fileName) {
                 writer.WriteUInt16(link.crosspointLink);
                 writer.WriteUInt16(link.unk1);
                 writer.WriteSingle(link.distance);
-                writer.WriteSingle(Radians(link.angle));
+                writer.WriteSingle(RAD(link.angle));
                 writer.WriteUInt16(link.unk2);
                 writer.WriteUInt32(link.priority);
                 writer.WriteUInt16(link.unk3);

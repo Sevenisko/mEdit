@@ -31,6 +31,8 @@
 #include <Editors/ScriptEditor.h>
 #include <set>
 
+#include <Utils/MathUtils.h>
+
 class I3D_lit_object;
 
 #define MISSION_VER_MAJOR 5
@@ -81,11 +83,6 @@ enum MenuCommand {
     // Help menu
     MCMD_HELP_ABOUT = 500
 };
-
-#define Radians(degrees) degrees*(PI / 180)
-#define Degrees(radians) radians * (180 / PI)
-
-#define Clamp(value, min, max) ((value) < (min) ? (min) : ((value) > (max) ? (max) : (value)))
 
 class SceneEditor {
   public:
@@ -235,8 +232,6 @@ class SceneEditor {
         m_SelectionType = SEL_FRAME;
 
         if(m_SelectedFrame) {
-            extern S_vector EulerFromQuat(const S_quat& rot);
-
             strcpy(m_SelectedFrameName, frame->m_pSzName);
             strcpy(m_SelectedFrameModel, frame->m_pSzModelName);
             m_SelectedFramePos = frame->GetPos();
