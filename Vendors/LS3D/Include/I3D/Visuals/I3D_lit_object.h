@@ -3,6 +3,7 @@
 #include <LS3D.h>
 #include <I3D/Visuals/I3D_object.h>
 #include <I3D/I3D_scene.h>
+#include <IBManager.h>
 
 typedef enum LightmapType : uint8_t { LM_TYPE_VERTEX = 5, LM_TYPE_BITMAP = 6 } LightmapType;
 
@@ -62,7 +63,7 @@ class lod {
     uint32_t unk3;
     uint32_t numFaceGroups;
     FaceMap* faceMaps;
-    uint32_t* indexBuffer;
+    C_IBuffer* indexBuffer;
     uint32_t unk4;
     void* indexBufferMetadata;
     uint32_t unk5;
@@ -223,7 +224,11 @@ class I3D_lit_object : public I3D_object {
                         return I3DERR_FILECORRUPTED;
                     }
 
-                    writer->Write(lod->indexBuffer, numIndices * sizeof(uint16_t));
+                    std::vector<uint16_t> indices(numIndices);
+                    BYTE* buf = (BYTE*)indices.data();
+                    lod->indexBuffer->indexBuffer->Lock(0, 0, (BYTE**)&buf, D3DLOCK_NOSYSLOCK);
+                    writer->Write(buf, numIndices * sizeof(uint16_t));
+                    lod->indexBuffer->indexBuffer->Unlock();
 
                     const lod::FaceMap* faceMaps = lod->faceMaps;
                     for(uint32_t i = 0; i < numFaceGroups; ++i) {

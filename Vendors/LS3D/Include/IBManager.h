@@ -14,6 +14,16 @@ class C_IBuffer {
 public:
     C_IBuffer() { }
     ~C_IBuffer() { }
+
+    BYTE* buffer;
+    uint8_t pad0[4];
+    uint32_t usage;
+    D3DPOOL pool;
+    IDirect3DIndexBuffer8* indexBuffer;
+    uint8_t pad1[32];
+    uint32_t numIndices;
+    uint8_t pad2[4];
+    uint32_t index;
 };
 
 class C_IBManager {
