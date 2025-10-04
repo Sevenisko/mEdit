@@ -32,6 +32,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    
+    - name: Setup x86 MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64_x86
 
     - name: Set reusable strings
       # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
@@ -48,7 +53,10 @@ jobs:
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        -G "Ninja"
         -S ${{ github.workspace }}
+        -A Win32
+        
 
     - name: Build
       # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
