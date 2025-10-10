@@ -12,7 +12,7 @@
 
 class EditorWindow;
 
-#define TARGET_FPS_CAP 1000
+#define TARGET_FPS_CAP 250
 
 extern void SetupImGui();
 extern void LogInfo(const char* fmt, ...);

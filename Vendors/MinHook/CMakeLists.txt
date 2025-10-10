@@ -1,0 +1,1 @@
+add_library(MinHook STATIC "hook.cpp" "trampoline.cpp" "buffer.cpp" "hde/hde32.cpp" "hde/hde64.cpp")

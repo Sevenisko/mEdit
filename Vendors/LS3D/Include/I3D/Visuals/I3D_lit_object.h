@@ -37,8 +37,8 @@ class lod {
     uint32_t vtable;
     uint8_t pad[44];
     uint32_t numColorsOrUVs;
-    uint32_t unk;
     S_vector2* UVs;
+    S_vector2* LitUVs;
     uint32_t unk2;
     LinkCoord* linkCoords;
     ColorRGBA* vertexColors;
@@ -60,12 +60,12 @@ class lod {
     }* bitmaps;
 
     uint32_t numBitmaps;
-    uint32_t unk3;
+    void* lightMap;
     uint32_t numFaceGroups;
     FaceMap* faceMaps;
     C_IBuffer* indexBuffer;
     uint32_t unk4;
-    void* indexBufferMetadata;
+    uint32_t indexBufferOffset;
     uint32_t unk5;
 };
 
@@ -100,6 +100,8 @@ class I3D_lit_object : public I3D_object {
         return numLevels;
     }
 
+    // TODO: Find out why the output is unreadable by LS3D
+
     LS3D_RESULT __stdcall CustomSave(BinaryWriter* writer) {
         if(!writer || !writer->IsOpen()) {
             debugPrintf("!! invalid or closed BinaryWriter   I3D_lit_object::Save()  this:0x%x %s  handle:0x%x", this, GetName(), writer);
@@ -117,9 +119,13 @@ class I3D_lit_object : public I3D_object {
 
         writer->WriteUInt8(numLevels);
 
-        for(size_t levelIndex = 0; levelIndex < 6; ++levelIndex) {
+        uint8_t activeCount = 0; // NEW: Track sequential active levels
+
+        for(size_t levelIndex = 0; levelIndex < 6; levelIndex++) {
             const LightmapLevel* level = &m_sLevels[levelIndex];
             if(!level || !level->active) { continue; }
+
+            activeCount++; // Increment for each active level
 
             if(!m_pMesh) {
                 debugPrintf("!! no mesh   I3D_lit_object::Save()  this:0x%x %s", this, GetName());
@@ -142,7 +148,7 @@ class I3D_lit_object : public I3D_object {
             levelHeader.numLODs = m_pMesh->m_uNumLODs;
             levelHeader.texelsPerUnit = level->texelsPerUnit;
             levelHeader.range = level->range;
-            levelHeader.level = min(static_cast<uint8_t>(levelIndex + 1), static_cast<uint8_t>(6));
+            levelHeader.level = activeCount; // CHANGED: Sequential 1-based, not levelIndex
 
             writer->Write(&levelHeader, sizeof(LevelHeader));
 
@@ -194,6 +200,8 @@ class I3D_lit_object : public I3D_object {
 
                             writer->Write(bitmap.pixels, bitmap.size * sizeof(ColorRGB));
 
+                            // TODO: Find out where we could delete the lightmap pixel data to prevent memory leaks
+
                             //delete[] bitmap.pixels;
                             //bitmap.pixels = nullptr;
                         }
@@ -202,12 +210,56 @@ class I3D_lit_object : public I3D_object {
                     uint32_t numUVs = lod->numColorsOrUVs;
                     writer->WriteUInt32(numUVs);
 
-                    if(!lod->UVs) {
+                    if(!lod->LitUVs) { // Renamed from UVs
                         debugPrintf("!! error writing data (OrigUV)  I3D_lit_object::Save()  this:0x%x %s  handle:0x%x", this, GetName(), writer);
                         return I3DERR_FILECORRUPTED;
                     }
 
-                    writer->Write(lod->UVs, numUVs * sizeof(S_vector2));
+                    // Reverse the postLoadProcess adjustment to write pre-adjusted (per-bitmap) UVs
+                    S_vector2* writeUVs = lod->LitUVs; // Default to existing
+                    if(lod->lightMap) { // Atlas exists, so m_pLitUV is post-adjusted—reverse to per-bitmap UVs
+                        // Atlas width/height from lightMap data (offsets match decomp: +40/+42 from inner ptr)
+                        void* atlasData = *reinterpret_cast<void**>(lod->lightMap);
+                        float atlasScaleX = 1.0f / static_cast<float>(*reinterpret_cast<uint16_t*>((uintptr_t)atlasData + 40));
+                        float atlasScaleY = 1.0f / static_cast<float>(*reinterpret_cast<uint16_t*>((uintptr_t)atlasData + 42));
+
+                        S_vector2* origUVs = new S_vector2[numUVs];
+                        S_vector2* adjUV = lod->LitUVs;
+                        lod::LinkCoord* lc = lod->linkCoords;
+                        for(uint32_t v = 0; v < numUVs; ++v, ++adjUV, ++lc) {
+                            uint32_t bi = lc->bitmapIndex;
+                            if(bi >= lod->numBitmaps) {
+                                debugPrintf("!! corrupted lightmap index in CustomSave() - bitmapIndex:%d >= numBitmaps:%d", bi, lod->numBitmaps);
+                                delete[] origUVs;
+                                return I3DERR_FILECORRUPTED;
+                            }
+                            lod::Bitmap& b = bitmaps[bi];
+
+                            float f = *reinterpret_cast<float*>(&b.format);
+                            float u2 = *reinterpret_cast<float*>(&b.unk2);
+                            bool rotated = (f >= 2.0f);
+                            if(rotated) { f -= 2.0f; }
+
+                            float origX, origY;
+                            if(rotated) {
+                                origY = (adjUV->x - f - 0.5f * atlasScaleX) / ((static_cast<float>(b.height) - 1.0f) * atlasScaleX);
+                                origX = (adjUV->y - u2 - 0.5f * atlasScaleY) / ((static_cast<float>(b.width) - 1.0f) * atlasScaleY);
+                            } else {
+                                origX = (adjUV->x - f - 0.5f * atlasScaleX) / ((static_cast<float>(b.width) - 1.0f) * atlasScaleX);
+                                origY = (adjUV->y - u2 - 0.5f * atlasScaleY) / ((static_cast<float>(b.height) - 1.0f) * atlasScaleY);
+                            }
+
+                            origUVs[v].x = origX;
+                            origUVs[v].y = origY;
+                        }
+                        writeUVs = origUVs;
+                    }
+
+                    writer->Write(writeUVs, numUVs * sizeof(S_vector2));
+
+                    if(writeUVs != lod->LitUVs) {
+                        delete[] writeUVs; // Clean up temp reversed UVs
+                    }
 
                     if(!lod->linkCoords) {
                         debugPrintf("!! error writing data (VertInfo)  I3D_lit_object::Save()  this:0x%x %s  handle:0x%x", this, GetName(), writer);
@@ -224,9 +276,10 @@ class I3D_lit_object : public I3D_object {
                         return I3DERR_FILECORRUPTED;
                     }
 
-                    std::vector<uint16_t> indices(numIndices);
-                    BYTE* buf = (BYTE*)indices.data();
-                    lod->indexBuffer->indexBuffer->Lock(0, 0, (BYTE**)&buf, D3DLOCK_NOSYSLOCK);
+                    // NOTE: Outputs invalid indices = mesh is fucked
+                    BYTE* buf = nullptr;
+                    lod->indexBuffer->indexBuffer->Lock(0, 0, &buf, D3DLOCK_NOSYSLOCK);
+                    buf += 2 * lod->indexBufferOffset;
                     writer->Write(buf, numIndices * sizeof(uint16_t));
                     lod->indexBuffer->indexBuffer->Unlock();
 

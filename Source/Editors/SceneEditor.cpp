@@ -33,6 +33,8 @@
 
 #include <Config.h>
 
+#include <MinHook.h>
+
 #define GAME_FOV 1.22173f
 
 std::map<I3D_sound*, std::string> g_SoundsMap;
@@ -538,6 +540,20 @@ void CreateImGuiResources() {
     ImGui_ImplDX8_CreateDeviceObjects();
 }
 
+typedef int(__cdecl* dbgPrintf_t)(const char* fmt, ...);
+dbgPrintf_t dbgPrintf_orig = nullptr;
+
+int dbgPrintf_Hook(const char* fmt, ...) { 
+    va_list args;
+    va_start(args, fmt);
+    char buf[480];
+    vsprintf(buf, fmt, args);
+    debugPrintf(buf);
+    va_end(args);
+
+    return dbgPrintf_orig(buf);
+}
+
 __declspec(naked) void ResetDevice_Before() {
     static DWORD address = (int)ls3df + 0x6D5EE;
 
@@ -727,6 +743,9 @@ INT64 __forceinline ElapsedMicroseconds(INT64 startCount, INT64 endCount) {
 }
 
 bool SceneEditor::Init() {
+    MH_CreateHookApi(L"LS3DF", "dbgPrintf", (LPVOID)&dbgPrintf_Hook, (LPVOID*)&dbgPrintf_orig);
+    MH_EnableHook(MH_ALL_HOOKS);
+
     m_IGraph = GetIGraph();
     m_3DDriver = I3DGetDriver();
     m_SoundDriver = ISndGetDriver();
@@ -2837,12 +2856,12 @@ void SceneEditor::Update() {
 
     if((g_FrameCount % TARGET_FPS_CAP) == 0) {
         g_AverageFPS = ((g_QPCFreq * TARGET_FPS_CAP) + (g_TicksAccum - 1)) / g_TicksAccum; // round-off
-        //m_DeltaTime = 1.0f / g_AverageFPS;
+        m_DeltaTime = 1.0f / g_AverageFPS;
         g_TicksAccum = 0;
         g_FrameCount = 0;
     }
 
-    m_DeltaTime = float(ElapsedMicroseconds(g_FrameStart, g_FrameEnd)) / 1000000.0f;
+    //m_DeltaTime = float(ElapsedMicroseconds(g_FrameStart, g_FrameEnd)) / 1000000.0f;
 
     g_FrameStart = g_FrameEnd;
 
@@ -3864,7 +3883,9 @@ bool SceneEditor::ReadChunk(E_CHUNK_TYPE chunkType, ChunkReader& chunk) {
 
                             S_vector pos{0, 0, 0};
 
-                            object->Load(chunk.GetReader()->GetDescriptor());
+                            LS3D_RESULT res = object->Load(chunk.GetReader()->GetDescriptor());
+
+                            if(I3D_FAIL(res)) { debugPrintf("Failed to load lightmap data for %s: %s", frame->GetName(), I3DGetResultMessage(res)); }
                         }
                     } break;
 
@@ -4304,9 +4325,29 @@ void SceneEditor::WriteCacheBin(const std::string& fileName) {
             for(auto& part: m_CacheParts) {
                 chunk.Ascend(CT_PART);
                 {
+                    chunk.Write(part.pos);
+                    chunk.Write(part.radius);
+                    chunk.Write(part.leftBottomCorner);
+                    chunk.Write(part.leftSide);
+                    chunk.Write(part.rightBottomCorner);
+                    chunk.Write(part.rightSide);
+                    chunk.Write(part.leftTopCorner);
+                    chunk.Write(part.bottomSide);
+                    chunk.Write(part.rightTopCorner);
+                    chunk.Write(part.topSide);
+
                     for(auto model: part.models) {
                         chunk.Ascend(CT_FRAME);
-                        { --chunk; }
+                        {
+                            chunk.WriteString(g_ModelsMap[model]);
+                            chunk.Write(model->GetPos());
+                            chunk.Write(model->GetRot());
+                            chunk.Write(model->GetScale());
+                            chunk.Write(0);
+                            chunk.Write(model->GetScale());
+
+                            --chunk;
+                        }
                     }
 
                     --chunk;
@@ -4414,6 +4455,7 @@ void SceneEditor::Save(const std::string& path) {
     WriteSceneBin(path + "\\scene2.bin");
     WriteRoadBin(path + "\\road.bin");
     WriteCheckBin(path + "\\check.bin");
+    WriteCacheBin(path + "\\cache.bin");
 
     if(m_SavedProperly) {
         ShowPopupMessage("Scene has been saved.");

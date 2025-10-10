@@ -14,7 +14,7 @@ Here are the following features within mEdit:
   - [x] Actor management (create/destroy/modify)
   - [x] Road.bin editing
   - [x] Check.bin editing
-  - [x] Possibility to modify cache.bin contents
+  - [x] Cache.bin editing
   - [ ] Ability to create difference files (*.chg)
   - [x] Built-in script editor
   - [ ] Collision editor

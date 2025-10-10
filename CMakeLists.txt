@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.10)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,6 +10,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${ROOT_DIR}/Bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${ROOT_DIR}/Bin)
 
 project(mEdit VERSION "0.0.1")
+
+add_subdirectory(Vendors/MinHook)
 
 add_library(ImGui STATIC 
     "${ROOT_DIR}/Vendors/ImGui/imgui.cpp" 
@@ -33,7 +35,7 @@ add_library(lodepng STATIC
 configure_file("${ROOT_DIR}/Config.tmpl" "${ROOT_DIR}/Include/Config.h")
 configure_file("${ROOT_DIR}/mEdit-tmpl.rc" "${ROOT_DIR}/mEdit.rc")
 
-include_directories("Include" "Vendors/LS3D/Include" "Vendors/DirectX/Include" "Vendors/ImGui" "Vendors/lodepng")
+include_directories("Include" "Vendors/LS3D/Include" "Vendors/DirectX/Include" "Vendors/MinHook" "Vendors/ImGui" "Vendors/lodepng")
 link_directories("Vendors/LS3D/Lib" "Vendors/DirectX/Lib")
 
 add_compile_options(/utf-8)
@@ -63,4 +65,4 @@ foreach(FILE ${LS3D_BIN_FILES})
     )
 endforeach()
 
-target_link_libraries(mEdit LS3DF rw_data ImGui lodepng gdi32 d3d8 d3d9 dinput8 dxguid comctl32 UxTheme)
+target_link_libraries(mEdit LS3DF MinHook rw_data ImGui lodepng gdi32 d3d8 d3d9 dinput8 dxguid comctl32 UxTheme)
