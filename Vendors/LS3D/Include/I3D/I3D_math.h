@@ -72,7 +72,7 @@ struct S_vector {
         return *this;
     }
 
-    __declspec(dllexport) S_vector __stdcall operator*(S_matrix const& mat);
+    __declspec(dllexport) S_vector __stdcall operator*(S_matrix const& mat) const;
     __declspec(dllexport) S_vector& __stdcall operator*=(S_matrix const& mat);
 
     inline S_vector operator+(S_vector const& vec) {

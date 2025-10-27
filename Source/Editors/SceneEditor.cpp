@@ -1033,38 +1033,112 @@ bool SceneEditor::Init() {
 
 bool SceneEditor::IsInit() const { return m_IGraph->IsInit(); }
 
+#define LINE_FVF (D3DFVF_XYZ | D3DFVF_DIFFUSE)
+
+void SceneEditor::DrawBatchedLines(const std::vector<LineVertex>& vertices, const std::vector<WORD>& indices, const S_vector& color, uint8_t alpha) {
+    if(vertices.empty()) return;
+
+    bool useIndexing = !indices.empty();
+    if(useIndexing && indices.size() % 2 != 0) return; // Indices must be even for lines
+
+    float calcAplha = (double)(255 - (unsigned int)alpha) * 0.0039215689;
+    float a = calcAplha * 255.0;
+    float r = color.x * 255.0;
+    float g = color.y * 255.0;
+    float b = color.z * 255.0;
+    uint32_t d3dColor = (int)b | (((int)g | (((int)r | ((int)a << 8)) << 8)) << 8);
+
+    // Apply default color if needed (or per-vertex colors could override)
+    std::vector<LineVertex> coloredVerts = vertices;
+    for(auto& v: coloredVerts) {
+        if(v.color == 0) v.color = d3dColor;
+    }
+
+    // Create vertex buffer
+    IDirect3DVertexBuffer8* pVB = nullptr;
+    UINT vbSize = static_cast<UINT>(coloredVerts.size() * sizeof(LineVertex));
+    m_D3DDevice->CreateVertexBuffer(vbSize, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, LINE_FVF, D3DPOOL_DEFAULT, &pVB);
+    if(!pVB) return;
+
+    // Fill VB
+    void* pVBData = nullptr;
+    pVB->Lock(0, 0, (BYTE**)&pVBData, D3DLOCK_DISCARD);
+    memcpy(pVBData, coloredVerts.data(), vbSize);
+    pVB->Unlock();
+
+    // Optional index buffer
+    IDirect3DIndexBuffer8* pIB = nullptr;
+    if(useIndexing) {
+        UINT ibSize = static_cast<UINT>(indices.size() * sizeof(WORD));
+        m_D3DDevice->CreateIndexBuffer(ibSize, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &pIB);
+        if(pIB) {
+            void* pIBData = nullptr;
+            pIB->Lock(0, 0, (BYTE**)&pIBData, D3DLOCK_DISCARD);
+            memcpy(pIBData, indices.data(), ibSize);
+            pIB->Unlock();
+            m_D3DDevice->SetIndices(pIB, 0);
+        }
+    }
+
+    // Set up rendering
+    m_D3DDevice->SetTextureStageState(0, D3DTSS_COLOROP, 4);
+    m_D3DDevice->SetTextureStageState(0, D3DTSS_ALPHAOP, 4);
+    m_D3DDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+    m_D3DDevice->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+    m_D3DDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+    m_D3DDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    m_D3DDevice->SetRenderState(D3DRS_ALPHAREF, TRUE);
+    m_D3DDevice->SetRenderState(D3DRS_LIGHTING, FALSE);
+    m_D3DDevice->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
+    m_D3DDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
+    m_D3DDevice->SetTexture(0, nullptr);
+    m_D3DDevice->SetStreamSource(0, pVB, sizeof(LineVertex));
+    m_D3DDevice->SetVertexShader(LINE_FVF);
+
+    // Draw
+    UINT numPrimitives = useIndexing ? static_cast<UINT>(indices.size() / 2) : static_cast<UINT>(coloredVerts.size() / 2);
+    if(useIndexing && pIB) {
+        m_D3DDevice->DrawIndexedPrimitive(D3DPT_LINELIST, 0, static_cast<UINT>(coloredVerts.size()), 0, numPrimitives);
+    } else {
+        m_D3DDevice->DrawPrimitive(D3DPT_LINELIST, 0, numPrimitives);
+    }
+
+    // Cleanup
+    pVB->Release();
+    if(pIB) pIB->Release();
+}
+
 void SceneEditor::DrawWireframeBox(const I3D_bbox& bbox, const S_vector& color, uint8_t alpha) {
-    // Bottom face
-    m_3DDriver->DrawLine({bbox.min.x, bbox.min.y, bbox.min.z}, {bbox.max.x, bbox.min.y, bbox.min.z}, color, alpha);
+    // Define the 8 vertices of the box
+    S_vector pos[8] = {
+        {bbox.min.x, bbox.min.y, bbox.min.z}, // 0: min min min
+        {bbox.max.x, bbox.min.y, bbox.min.z}, // 1: max min min
+        {bbox.max.x, bbox.min.y, bbox.max.z}, // 2: max min max
+        {bbox.min.x, bbox.min.y, bbox.max.z}, // 3: min min max
+        {bbox.min.x, bbox.max.y, bbox.min.z}, // 4: min max min
+        {bbox.max.x, bbox.max.y, bbox.min.z}, // 5: max max min
+        {bbox.max.x, bbox.max.y, bbox.max.z}, // 6: max max max
+        {bbox.min.x, bbox.max.y, bbox.max.z} // 7: min max max
+    };
 
-    m_3DDriver->DrawLine({bbox.max.x, bbox.min.y, bbox.min.z}, {bbox.max.x, bbox.min.y, bbox.max.z}, color, alpha);
+    std::vector<LineVertex> vertices(8);
+    for(int i = 0; i < 8; ++i) {
+        vertices[i] = {pos[i].x, pos[i].y, pos[i].z, 0};
+    }
 
-    m_3DDriver->DrawLine({bbox.max.x, bbox.min.y, bbox.max.z}, {bbox.min.x, bbox.min.y, bbox.max.z}, color, alpha);
+    // Indices for the 12 lines
+    std::vector<WORD> indices = {
+        0, 1, 1, 2, 2, 3, 3, 0, // Bottom face
+        4, 5, 5, 6, 6, 7, 7, 4, // Top face
+        0, 4, 1, 5, 2, 6, 3, 7 // Vertical edges
+    };
 
-    m_3DDriver->DrawLine({bbox.min.x, bbox.min.y, bbox.max.z}, {bbox.min.x, bbox.min.y, bbox.min.z}, color, alpha);
-
-    // Top face
-    m_3DDriver->DrawLine({bbox.min.x, bbox.max.y, bbox.min.z}, {bbox.max.x, bbox.max.y, bbox.min.z}, color, alpha);
-
-    m_3DDriver->DrawLine({bbox.max.x, bbox.max.y, bbox.min.z}, {bbox.max.x, bbox.max.y, bbox.max.z}, color, alpha);
-
-    m_3DDriver->DrawLine({bbox.max.x, bbox.max.y, bbox.max.z}, {bbox.min.x, bbox.max.y, bbox.max.z}, color, alpha);
-
-    m_3DDriver->DrawLine({bbox.min.x, bbox.max.y, bbox.max.z}, {bbox.min.x, bbox.max.y, bbox.min.z}, color, alpha);
-
-    // Vertical edges
-    m_3DDriver->DrawLine({bbox.min.x, bbox.min.y, bbox.min.z}, {bbox.min.x, bbox.max.y, bbox.min.z}, color, alpha);
-
-    m_3DDriver->DrawLine({bbox.max.x, bbox.min.y, bbox.min.z}, {bbox.max.x, bbox.max.y, bbox.min.z}, color, alpha);
-
-    m_3DDriver->DrawLine({bbox.max.x, bbox.min.y, bbox.max.z}, {bbox.max.x, bbox.max.y, bbox.max.z}, color, alpha);
-
-    m_3DDriver->DrawLine({bbox.min.x, bbox.min.y, bbox.max.z}, {bbox.min.x, bbox.max.y, bbox.max.z}, color, alpha);
+    DrawBatchedLines(vertices, indices, color, alpha);
 }
 
 void SceneEditor::DrawWireframeCone(const S_vector& pos, const S_vector& dir, float radius, float height, const S_vector& color, uint8_t alpha, int segments) {
     // Generate vertices: one for apex, 'segments' for the base
-    std::vector<S_vector> vertices(segments + 1);
+    std::vector<S_vector> posVerts(segments + 1);
 
     S_vector position = pos;
 
@@ -1073,7 +1147,7 @@ void SceneEditor::DrawWireframeCone(const S_vector& pos, const S_vector& dir, fl
     nDir.SetNormalized(dir);
 
     // Apex at position
-    vertices[0] = position;
+    posVerts[0] = position;
 
     // Base center at position + height * nDir
     S_vector baseCenter = position + nDir * height;
@@ -1091,25 +1165,31 @@ void SceneEditor::DrawWireframeCone(const S_vector& pos, const S_vector& dir, fl
         float cosTheta = cosf(theta);
         float sinTheta = sinf(theta);
         // Base vertex = baseCenter + radius * (cos(θ) * u + sin(θ) * v)
-        vertices[i + 1] = baseCenter + (u * (radius * cosTheta) + v * (radius * sinTheta));
+        posVerts[i + 1] = baseCenter + (u * (radius * cosTheta) + v * (radius * sinTheta));
     }
 
-    // Draw base circle edges
-    for(int i = 0; i < segments; ++i) {
-        int next = (i + 1) % segments;
-        m_3DDriver->DrawLine(vertices[1 + i], // Current base vertex
-                             vertices[1 + next], // Next base vertex (wraps around)
-                             color,
-                             alpha);
+    std::vector<LineVertex> vertices(segments + 1);
+    for(int i = 0; i <= segments; ++i) {
+        vertices[i] = {posVerts[i].x, posVerts[i].y, posVerts[i].z, 0};
     }
 
-    // Draw lines from base to apex
+    // Indices for base circle and lines to apex
+    std::vector<WORD> indices;
+    indices.reserve(segments * 4); // segments for base + segments for sides, each 2 indices
+
+    // Base circle
     for(int i = 0; i < segments; ++i) {
-        m_3DDriver->DrawLine(vertices[1 + i], // Base vertex
-                             vertices[0], // Apex
-                             color,
-                             alpha);
+        indices.push_back(static_cast<WORD>(1 + i));
+        indices.push_back(static_cast<WORD>(1 + (i + 1) % segments));
     }
+
+    // Lines from base to apex
+    for(int i = 0; i < segments; ++i) {
+        indices.push_back(static_cast<WORD>(1 + i));
+        indices.push_back(0);
+    }
+
+    DrawBatchedLines(vertices, indices, color, alpha);
 }
 
 void SceneEditor::DrawWireframeCylinder(const S_vector& basePos, float radius, float height, const S_vector& color, uint32_t alpha, int segments) {
@@ -1117,17 +1197,14 @@ void SceneEditor::DrawWireframeCylinder(const S_vector& basePos, float radius, f
         return; // Basic validation
     }
 
-    std::vector<S_vector> bottomPoints;
-    std::vector<S_vector> topPoints;
-    bottomPoints.reserve(segments);
-    topPoints.reserve(segments);
+    std::vector<S_vector> posVerts(2 * segments);
 
     // Generate bottom circle points
     for(int i = 0; i < segments; ++i) {
         float theta = 2.0f * PI * static_cast<float>(i) / static_cast<float>(segments);
         float cx = radius * cosf(theta);
         float cy = radius * sinf(theta);
-        bottomPoints.emplace_back(basePos.x + cx, basePos.y, basePos.z + cy);
+        posVerts[i] = {basePos.x + cx, basePos.y, basePos.z + cy};
     }
 
     // Generate top circle points
@@ -1135,25 +1212,37 @@ void SceneEditor::DrawWireframeCylinder(const S_vector& basePos, float radius, f
         float theta = 2.0f * PI * static_cast<float>(i) / static_cast<float>(segments);
         float cx = radius * cosf(theta);
         float cy = radius * sinf(theta);
-        topPoints.emplace_back(basePos.x + cx, basePos.y + height, basePos.z + cy);
+        posVerts[segments + i] = {basePos.x + cx, basePos.y + height, basePos.z + cy};
     }
 
-    // Draw bottom circle lines
-    for(int i = 0; i < segments; ++i) {
-        int next = (i + 1) % segments;
-        m_3DDriver->DrawLine(bottomPoints[i], bottomPoints[next], color, alpha);
+    std::vector<LineVertex> vertices(2 * segments);
+    for(int i = 0; i < 2 * segments; ++i) {
+        vertices[i] = {posVerts[i].x, posVerts[i].y, posVerts[i].z, 0};
     }
 
-    // Draw top circle lines
+    // Indices for bottom circle, top circle, and verticals
+    std::vector<WORD> indices;
+    indices.reserve(6 * segments); // 3 loops * 2 indices per line
+
+    // Bottom circle
     for(int i = 0; i < segments; ++i) {
-        int next = (i + 1) % segments;
-        m_3DDriver->DrawLine(topPoints[i], topPoints[next], color, alpha);
+        indices.push_back(static_cast<WORD>(i));
+        indices.push_back(static_cast<WORD>((i + 1) % segments));
     }
 
-    // Draw vertical connecting lines
+    // Top circle
     for(int i = 0; i < segments; ++i) {
-        m_3DDriver->DrawLine(bottomPoints[i], topPoints[i], color, alpha);
+        indices.push_back(static_cast<WORD>(segments + i));
+        indices.push_back(static_cast<WORD>(segments + (i + 1) % segments));
     }
+
+    // Vertical lines
+    for(int i = 0; i < segments; ++i) {
+        indices.push_back(static_cast<WORD>(i));
+        indices.push_back(static_cast<WORD>(segments + i));
+    }
+
+    DrawBatchedLines(vertices, indices, color, static_cast<uint8_t>(alpha));
 }
 
 void SceneEditor::DrawWireframeFrustum(const S_vector& pos,
@@ -1166,7 +1255,7 @@ void SceneEditor::DrawWireframeFrustum(const S_vector& pos,
                                        const S_vector& color,
                                        uint8_t alpha) {
     // Generate vertices: 4 for top base, 4 for bottom base
-    std::vector<S_vector> vertices(8);
+    std::vector<S_vector> posVerts(8);
 
     S_vector position = pos;
 
@@ -1189,36 +1278,32 @@ void SceneEditor::DrawWireframeFrustum(const S_vector& pos,
     // Generate vertices for top base (rectangle, indices 0 to 3)
     float halfWidthTop = widthTop * 0.5f;
     float halfHeightTop = heightTop * 0.5f;
-    vertices[0] = topCenter + (u * halfWidthTop) + (v * halfHeightTop); // Top-right
-    vertices[1] = topCenter + (u * halfWidthTop) - (v * halfHeightTop); // Bottom-right
-    vertices[2] = topCenter - (u * halfWidthTop) - (v * halfHeightTop); // Bottom-left
-    vertices[3] = topCenter - (u * halfWidthTop) + (v * halfHeightTop); // Top-left
+    posVerts[0] = topCenter + (u * halfWidthTop) + (v * halfHeightTop); // Top-right
+    posVerts[1] = topCenter + (u * halfWidthTop) - (v * halfHeightTop); // Bottom-right
+    posVerts[2] = topCenter - (u * halfWidthTop) - (v * halfHeightTop); // Bottom-left
+    posVerts[3] = topCenter - (u * halfWidthTop) + (v * halfHeightTop); // Top-left
 
     // Generate vertices for bottom base (rectangle, indices 4 to 7)
     float halfWidthBottom = widthBottom * 0.5f;
     float halfHeightBottom = heightBottom * 0.5f;
-    vertices[4] = bottomCenter + (u * halfWidthBottom) + (v * halfHeightBottom); // Top-right
-    vertices[5] = bottomCenter + (u * halfWidthBottom) - (v * halfHeightBottom); // Bottom-right
-    vertices[6] = bottomCenter - (u * halfWidthBottom) - (v * halfHeightBottom); // Bottom-left
-    vertices[7] = bottomCenter - (u * halfWidthBottom) + (v * halfHeightBottom); // Top-left
+    posVerts[4] = bottomCenter + (u * halfWidthBottom) + (v * halfHeightBottom); // Top-right
+    posVerts[5] = bottomCenter + (u * halfWidthBottom) - (v * halfHeightBottom); // Bottom-right
+    posVerts[6] = bottomCenter - (u * halfWidthBottom) - (v * halfHeightBottom); // Bottom-left
+    posVerts[7] = bottomCenter - (u * halfWidthBottom) + (v * halfHeightBottom); // Top-left
 
-    // Draw top base rectangle edges (0-1, 1-2, 2-3, 3-0)
-    m_3DDriver->DrawLine(vertices[0], vertices[1], color, alpha);
-    m_3DDriver->DrawLine(vertices[1], vertices[2], color, alpha);
-    m_3DDriver->DrawLine(vertices[2], vertices[3], color, alpha);
-    m_3DDriver->DrawLine(vertices[3], vertices[0], color, alpha);
+    std::vector<LineVertex> vertices(8);
+    for(int i = 0; i < 8; ++i) {
+        vertices[i] = {posVerts[i].x, posVerts[i].y, posVerts[i].z, 0};
+    }
 
-    // Draw bottom base rectangle edges (4-5, 5-6, 6-7, 7-4)
-    m_3DDriver->DrawLine(vertices[4], vertices[5], color, alpha);
-    m_3DDriver->DrawLine(vertices[5], vertices[6], color, alpha);
-    m_3DDriver->DrawLine(vertices[6], vertices[7], color, alpha);
-    m_3DDriver->DrawLine(vertices[7], vertices[4], color, alpha);
+    // Indices for top base, bottom base, and sides
+    std::vector<WORD> indices = {
+        0, 1, 1, 2, 2, 3, 3, 0, // Top base
+        4, 5, 5, 6, 6, 7, 7, 4, // Bottom base
+        0, 4, 1, 5, 2, 6, 3, 7 // Side edges
+    };
 
-    // Draw side edges connecting top to bottom (0-4, 1-5, 2-6, 3-7)
-    m_3DDriver->DrawLine(vertices[0], vertices[4], color, alpha);
-    m_3DDriver->DrawLine(vertices[1], vertices[5], color, alpha);
-    m_3DDriver->DrawLine(vertices[2], vertices[6], color, alpha);
-    m_3DDriver->DrawLine(vertices[3], vertices[7], color, alpha);
+    DrawBatchedLines(vertices, indices, color, alpha);
 }
 
 float g_FramerateUpdateTime = 0;
@@ -1557,18 +1642,44 @@ void SceneEditor::Update() {
                     DrawWireframeCylinder(pos, cylinder.radius, 512.0f, g_ColliderColor, 0x00);
                 }
             }
-            for (CollisionTriangle& tri : m_ColManager.tris) {
+
+            std::vector<LineVertex> lineVerts;
+            std::vector<uint16_t> indices;
+            uint16_t vertOffset = 0;
+
+            for(CollisionTriangle& tri: m_ColManager.tris) {
                 S_vector framePos = tri.vertices[0].linkedFrame->GetWorldPos();
                 S_vector pos = framePos + tri.CalculateCentroid();
                 float dist = (m_CameraPos - pos).Magnitude();
 
-                if(dist <= 64) { 
-                    m_IGraph->SetWorldMatrix(tri.vertices[0].linkedFrame->GetWorldMat());
+                if(dist <= 64) {
+                    S_matrix worldMat = tri.vertices[0].linkedFrame->GetWorldMat();
 
-                    m_3DDriver->DrawLine(tri.vertices[0].vertexPos, tri.vertices[1].vertexPos, g_ColliderColor, 0x00);
-                    m_3DDriver->DrawLine(tri.vertices[1].vertexPos, tri.vertices[2].vertexPos, g_ColliderColor, 0x00);
-                    m_3DDriver->DrawLine(tri.vertices[2].vertexPos, tri.vertices[0].vertexPos, g_ColliderColor, 0x00);
+                    S_vector w0 = tri.vertices[0].vertexPos * worldMat;
+                    S_vector w1 = tri.vertices[1].vertexPos * worldMat;
+                    S_vector w2 = tri.vertices[2].vertexPos * worldMat;
+
+                    lineVerts.push_back({w0.x, w0.y, w0.z, 0});
+                    lineVerts.push_back({w1.x, w1.y, w1.z, 0});
+                    lineVerts.push_back({w2.x, w2.y, w2.z, 0});
+
+                    indices.push_back(vertOffset + 0);
+                    indices.push_back(vertOffset + 1);
+                    indices.push_back(vertOffset + 1);
+                    indices.push_back(vertOffset + 2);
+                    indices.push_back(vertOffset + 2);
+                    indices.push_back(vertOffset + 0);
+
+                    vertOffset += 3;
                 }
+            }
+
+            if(!lineVerts.empty()) {
+                S_matrix mat;
+                mat.Identity();
+                m_IGraph->SetWorldMatrix(mat);
+
+                DrawBatchedLines(lineVerts, indices, g_ColliderColor, 0x00);
             }
         }
 

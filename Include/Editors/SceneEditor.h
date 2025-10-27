@@ -817,6 +817,15 @@ class SceneEditor {
         return hierarchy;
     }
 
+    struct LineVertex {
+        float x, y, z; // Position
+        DWORD color; // Color (0xAARRGGBB)
+    };
+
+    void DrawBatchedLines(const std::vector<LineVertex>& vertices,
+                          const std::vector<WORD>& indices = {}, // Optional indices
+                          const S_vector& color = {1, 1, 1},
+                          uint8_t alpha = 0x00);
     void DrawWireframeBox(const I3D_bbox& bbox, const S_vector& color, uint8_t alpha);
     void DrawWireframeCone(const S_vector& pos, const S_vector& dir, float radius, float height, const S_vector& color, uint8_t alpha, int segments = 16);
     void DrawWireframeCylinder(const S_vector& basePos, float radius, float height, const S_vector& color, uint32_t alpha, int segments = 16);
