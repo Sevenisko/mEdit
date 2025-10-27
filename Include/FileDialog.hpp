@@ -66,12 +66,16 @@ class FileDialog {
     SelectionResult GetResult() const { return m_Result; }
 
     bool Show(HWND hwndParent) {
+        HICON icon = LoadIconA(GetModuleHandleA(NULL), MAKEINTRESOURCE(101));
+
         WNDCLASSEXA wc = {0};
         wc.cbSize = sizeof(WNDCLASSEXA);
         wc.lpfnWndProc = DialogProcStatic;
         wc.hInstance = GetModuleHandleA(nullptr);
         wc.lpszClassName = "FileDialogClass";
         wc.hbrBackground = CreateSolidBrush(RGB(45, 45, 45)); // Dark background
+        wc.hIcon = icon;
+        wc.hIconSm = icon;
         if(!RegisterClassExA(&wc)) { return false; }
 
         m_hFont = CreateFontA(16,

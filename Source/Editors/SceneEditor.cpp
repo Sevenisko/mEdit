@@ -45,6 +45,8 @@ static WNDPROC g_OriginalChildWndProc = NULL;
 
 static bool g_ChangesMade = false;
 
+S_vector g_ColliderColor(0.57f, 0.96f, 0.55f);
+
 std::string OpenFileDialog(FileDialog::Mode mode, const std::string& title, const std::vector<FileDialog::Filter>& filters) {
     FileDialog dialog(mode, title, filters);
     if(dialog.Show(GetIGraph()->GetMainHWND())) {
@@ -130,6 +132,7 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             return 0;
         case MCMD_VIEW_WEBNODES: SceneEditor::Get()->ToggleWebView(); return 0;
         case MCMD_VIEW_ROADPOINTS: SceneEditor::Get()->ToggleRoadView(); return 0;
+        case MCMD_VIEW_COLLISIONS: SceneEditor::Get()->ToggleCollisionView(); return 0;
         case MCMD_EDIT_COPY:
             if(frame != nullptr) { SceneEditor::Get()->CopySelection(); }
 
@@ -266,6 +269,19 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
             SceneEditor::Get()->SelectWaypoint(point);
 
+            return 0;
+        case MCMD_CREATE_WEBNODE:
+            node = SceneEditor::Get()->CreateWebNode();
+
+            SceneEditor::Get()->SelectWebNode(node);
+            return 0;
+        case MCMD_CREATE_SCRIPT:
+            script = SceneEditor::Get()->CreateScript();
+
+            SceneEditor::Get()->SelectScript(script);
+            return 0;
+        case MCMD_CREATE_LIGHTMAP:
+            if(!SceneEditor::Get()->IsShowingLightmapDialog()) { SceneEditor::Get()->ShowLightmapDialog(); }
             return 0;
         }
         break;
@@ -543,7 +559,7 @@ void CreateImGuiResources() {
 typedef int(__cdecl* dbgPrintf_t)(const char* fmt, ...);
 dbgPrintf_t dbgPrintf_orig = nullptr;
 
-int dbgPrintf_Hook(const char* fmt, ...) { 
+int dbgPrintf_Hook(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
     char buf[480];
@@ -775,6 +791,8 @@ bool SceneEditor::Init() {
     CheckMenuItem(m_ViewMenu, MCMD_VIEW_WEBNODES, MF_BYCOMMAND | MF_UNCHECKED);
     AppendMenu(m_ViewMenu, MF_STRING, MCMD_VIEW_ROADPOINTS, "Road Points\tCtrl+2");
     CheckMenuItem(m_ViewMenu, MCMD_VIEW_ROADPOINTS, MF_BYCOMMAND | MF_UNCHECKED);
+    AppendMenu(m_ViewMenu, MF_STRING, MCMD_VIEW_COLLISIONS, "Collisions\tCtrl+3");
+    CheckMenuItem(m_ViewMenu, MCMD_VIEW_COLLISIONS, MF_BYCOMMAND | MF_UNCHECKED);
 
     // Edit menu
     AppendMenu(m_EditMenu, MF_STRING, MCMD_EDIT_UNDO, "Undo\tCtrl+Z");
@@ -812,6 +830,7 @@ bool SceneEditor::Init() {
     AppendMenu(m_CreateMenu, MF_POPUP, (UINT_PTR)m_CreateRoadMenu, "Road");
     AppendMenu(m_CreateMenu, MF_STRING, MCMD_CREATE_WEBNODE, "Web Node");
     AppendMenu(m_CreateMenu, MF_STRING, MCMD_CREATE_SCRIPT, "Script");
+    //AppendMenu(m_CreateMenu, MF_STRING, MCMD_CREATE_LIGHTMAP, "Lightmap");
 
     // Help menu
     AppendMenu(m_HelpMenu, MF_STRING, MCMD_HELP_ABOUT, "About mEdit");
@@ -1090,6 +1109,50 @@ void SceneEditor::DrawWireframeCone(const S_vector& pos, const S_vector& dir, fl
                              vertices[0], // Apex
                              color,
                              alpha);
+    }
+}
+
+void SceneEditor::DrawWireframeCylinder(const S_vector& basePos, float radius, float height, const S_vector& color, uint32_t alpha, int segments) {
+    if(m_3DDriver == nullptr || segments < 3 || radius <= 0.0f || height <= 0.0f) {
+        return; // Basic validation
+    }
+
+    std::vector<S_vector> bottomPoints;
+    std::vector<S_vector> topPoints;
+    bottomPoints.reserve(segments);
+    topPoints.reserve(segments);
+
+    // Generate bottom circle points
+    for(int i = 0; i < segments; ++i) {
+        float theta = 2.0f * PI * static_cast<float>(i) / static_cast<float>(segments);
+        float cx = radius * cosf(theta);
+        float cy = radius * sinf(theta);
+        bottomPoints.emplace_back(basePos.x + cx, basePos.y, basePos.z + cy);
+    }
+
+    // Generate top circle points
+    for(int i = 0; i < segments; ++i) {
+        float theta = 2.0f * PI * static_cast<float>(i) / static_cast<float>(segments);
+        float cx = radius * cosf(theta);
+        float cy = radius * sinf(theta);
+        topPoints.emplace_back(basePos.x + cx, basePos.y + height, basePos.z + cy);
+    }
+
+    // Draw bottom circle lines
+    for(int i = 0; i < segments; ++i) {
+        int next = (i + 1) % segments;
+        m_3DDriver->DrawLine(bottomPoints[i], bottomPoints[next], color, alpha);
+    }
+
+    // Draw top circle lines
+    for(int i = 0; i < segments; ++i) {
+        int next = (i + 1) % segments;
+        m_3DDriver->DrawLine(topPoints[i], topPoints[next], color, alpha);
+    }
+
+    // Draw vertical connecting lines
+    for(int i = 0; i < segments; ++i) {
+        m_3DDriver->DrawLine(bottomPoints[i], topPoints[i], color, alpha);
     }
 }
 
@@ -1430,6 +1493,85 @@ void SceneEditor::Update() {
             }
         }
 
+        if(m_DrawCollisions) {
+            for(CollisionAABB& aabb: m_ColManager.aabbs) {
+                S_vector pos = (aabb.min + aabb.max) * 0.5f;
+
+                float dist = (m_CameraPos - pos).Magnitude();
+                if(dist <= 256) {
+                    S_matrix mat;
+                    mat.Identity();
+
+                    m_IGraph->SetWorldMatrix(mat);
+                    I3D_bbox bbox;
+                    bbox.min = aabb.min;
+                    bbox.max = aabb.max;
+                    DrawWireframeBox(bbox, g_ColliderColor, 0x00);
+                }
+            }
+            for(CollisionXTOBB& xtobb: m_ColManager.xtobbs) {
+                S_vector pos = *(S_vector*)&xtobb.transform.m_41;
+                float dist = (m_CameraPos - pos).Magnitude();
+                if(dist <= 256) {
+                    m_IGraph->SetWorldMatrix(xtobb.transform);
+                    I3D_bbox bbox;
+                    bbox.min = xtobb.minExtent;
+                    bbox.max = xtobb.maxExtent;
+                    DrawWireframeBox(bbox, g_ColliderColor, 0x00);
+                }
+            }
+            for(CollisionOBB& obb: m_ColManager.obbs) {
+                S_vector pos = *(S_vector*)&obb.transform.m_41;
+                float dist = (m_CameraPos - pos).Magnitude();
+
+                if(dist <= 256) {
+                    m_IGraph->SetWorldMatrix(obb.transform);
+                    I3D_bbox bbox;
+                    bbox.min = obb.minExtent;
+                    bbox.max = obb.maxExtent;
+                    DrawWireframeBox(bbox, g_ColliderColor, 0x00);
+                }
+            }
+            for(CollisionSphere& sphere: m_ColManager.spheres) {
+                float dist = (m_CameraPos - sphere.pos).Magnitude();
+
+                if(dist <= 256) {
+                    S_matrix mat;
+                    mat.Identity();
+
+                    I3D_bsphere bsphere;
+                    bsphere.pos = sphere.pos;
+                    bsphere.radius = sphere.radius;
+                    m_3DDriver->DrawSphere(mat, bsphere, g_ColliderColor, 0x00);
+                }
+            }
+            for(CollisionCylinder& cylinder: m_ColManager.cylinders) {
+                S_vector pos = {cylinder.pos.x, 0, cylinder.pos.y};
+                float dist = (m_CameraPos - pos).Magnitude();
+
+                if(dist <= 256) {
+                    S_matrix mat;
+                    mat.Identity();
+
+                    m_IGraph->SetWorldMatrix(mat);
+                    DrawWireframeCylinder(pos, cylinder.radius, 512.0f, g_ColliderColor, 0x00);
+                }
+            }
+            for (CollisionTriangle& tri : m_ColManager.tris) {
+                S_vector framePos = tri.vertices[0].linkedFrame->GetWorldPos();
+                S_vector pos = framePos + tri.CalculateCentroid();
+                float dist = (m_CameraPos - pos).Magnitude();
+
+                if(dist <= 64) { 
+                    m_IGraph->SetWorldMatrix(tri.vertices[0].linkedFrame->GetWorldMat());
+
+                    m_3DDriver->DrawLine(tri.vertices[0].vertexPos, tri.vertices[1].vertexPos, g_ColliderColor, 0x00);
+                    m_3DDriver->DrawLine(tri.vertices[1].vertexPos, tri.vertices[2].vertexPos, g_ColliderColor, 0x00);
+                    m_3DDriver->DrawLine(tri.vertices[2].vertexPos, tri.vertices[0].vertexPos, g_ColliderColor, 0x00);
+                }
+            }
+        }
+
         for(auto frame: m_Frames) {
             bool hasDrawnFrameSprite = false;
 
@@ -1754,6 +1896,11 @@ void SceneEditor::Update() {
                 }
             }
         } break;
+        case SEL_SCRIPT: {
+            ImGui::NonCollapsingHeader("Script");
+            ImGui::InputText("Name", &m_SelectedScript->name);
+            if(ImGui::Button("Open")) { m_ScriptEditor.Open(m_SelectedScript); }
+        } break;
         case SEL_WAYPOINT: {
             if(m_SelectedWaypoint) {
                 ImGui::NonCollapsingHeader("Waypoint");
@@ -1917,7 +2064,7 @@ void SceneEditor::Update() {
 
                     if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
                         ExtractTransformComponents(&mat, &m_SelectedWaypoint->pos, &euler, &scale);
-                        m_SelectedWaypoint->pos = SnapToGrid(m_SelectedWaypoint->pos);
+                        if(m_TransformGridSnapping) m_SelectedWaypoint->pos = SnapToGrid(m_SelectedWaypoint->pos);
                     }
                 }
             }
@@ -2063,7 +2210,7 @@ void SceneEditor::Update() {
                     if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
                         ExtractTransformComponents(&mat, &m_SelectedCrosspoint->pos, &euler, &scale);
 
-                        m_SelectedCrosspoint->pos = SnapToGrid(m_SelectedCrosspoint->pos);
+                        if(m_TransformGridSnapping) m_SelectedCrosspoint->pos = SnapToGrid(m_SelectedCrosspoint->pos);
                     }
                 }
             }
@@ -2211,7 +2358,7 @@ void SceneEditor::Update() {
                     if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
                         ExtractTransformComponents(&mat, &m_SelectedNode->pos, &euler, &scale);
 
-                        m_SelectedNode->pos = SnapToGrid(m_SelectedNode->pos);
+                        if(m_TransformGridSnapping) m_SelectedNode->pos = SnapToGrid(m_SelectedNode->pos);
                     }
                 }
             }
@@ -2457,6 +2604,21 @@ void SceneEditor::Update() {
                     actor->OnInspectorGUI();
                 }
 
+                HierarchyEntry* entry = FindEntryByFrame(m_SelectedFrame);
+                if(entry && !entry->collisions.empty()) {
+                    ImGui::NonCollapsingHeader("Collisions");
+                    int index = 0;
+                    for(CollisionVolume* volume: entry->collisions) {
+                        char name[64];
+                        sprintf(name, "Collision %d", index);
+                        if(ImGui::TreeNode(name)) {
+                            ImGui::Text("Type: %s", volume->GetTypeAsString().c_str());
+                            ImGui::TreePop();
+                        }
+                        index++;
+                    }
+                }
+
                 D3DMATRIX proj, view;
                 m_D3DDevice->GetTransform(D3DTS_PROJECTION, &proj);
                 m_D3DDevice->GetTransform(D3DTS_VIEW, &view);
@@ -2475,7 +2637,9 @@ void SceneEditor::Update() {
                 if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
                     ExtractTransformComponents(&mat, &m_SelectedFrameWorldPos, &m_SelectedFrameEuler, &m_SelectedFrameScale);
 
-                    if(m_CurrentTransformOperation == ImGuizmo::TRANSLATE) { m_SelectedFrameWorldPos = SnapToGrid(m_SelectedFrameWorldPos); }
+                    if(m_CurrentTransformOperation == ImGuizmo::TRANSLATE && m_TransformGridSnapping) {
+                        m_SelectedFrameWorldPos = SnapToGrid(m_SelectedFrameWorldPos);
+                    }
                 }
 
                 m_SelectedFrame->SetWorldPos(m_SelectedFrameWorldPos);
@@ -2717,6 +2881,127 @@ void SceneEditor::Update() {
         ImGui::PopStyleVar();
 
         if(m_PopupMessageTime >= m_PopupMessageFadeOutStart) { ImGui::PopStyleColor(); }
+    }
+
+    if(m_ShowLightmapDialog) {
+        static bool bakeBitmap = true;
+        static bool coloredEdgeLines = false;
+        static bool includeAllLights = true;
+        static bool recomputeLightmaps = false;
+        static float lmSize = 256.0f;
+
+        if(ImGui::Begin("Lightmap", &m_ShowLightmapDialog)) {
+            if(!m_SelectedFrame) {
+                if(m_LightmapObjects.size() > 0) {
+                    ImGui::Checkbox("Bitmap", &bakeBitmap);
+                    ImGui::InputFloat("Scale", &lmSize, 1.0f, 32.0f, "%.1f");
+                    ImGui::Checkbox("Colored edge lines", &coloredEdgeLines);
+                    ImGui::Checkbox("Include all lights", &includeAllLights);
+                    ImGui::Checkbox("Rebuild LM", &recomputeLightmaps);
+
+                    if(ImGui::Button("Bake All LMs")) {
+                        for(I3D_lit_object* obj: m_LightmapObjects) {
+                            S_vector pos(0, 0, 0);
+
+                            uint32_t flags = 0;
+
+                            if(bakeBitmap) { flags |= LM_BITMAP; }
+                            if(includeAllLights) { flags |= LM_INCLUDELIGHTS; }
+                            if(coloredEdgeLines) { flags |= LM_DEBUGLINES; }
+                            if(recomputeLightmaps) { flags |= LM_BUILD; }
+
+                            obj->Construct(m_Scene, pos, lmSize, flags, NULL, NULL);
+                        }
+                    }
+                } else {
+                    ImGui::Text("Before doing any LM operations, select the appropriate frame.");
+                }
+            } else {
+                I3D_FRAME_TYPE type = m_SelectedFrame->GetType();
+
+                if(type != FRAME_VISUAL && type != FRAME_MODEL) {
+                    ImGui::Text("Invalid frame type, we can bake lightmaps on models or visuals!");
+                } else {
+                    if(type == FRAME_VISUAL) {
+                        I3D_visual* visual = (I3D_visual*)m_SelectedFrame;
+                        I3D_VISUAL_TYPE vType = visual->GetVisualType();
+
+                        if(vType != VISUAL_LIT_OBJECT) {
+                            if(vType == VISUAL_OBJECT) {
+                                ImGui::Text("In order to do lightmap operations, this object must be converted to lit object.");
+                                if(ImGui::Button("Convert")) {
+                                    bool ok = false;
+                                    I3D_visual* newVisual = m_3DDriver->CreateVisual(VISUAL_LIT_OBJECT);
+                                    if(newVisual) {
+                                        LS3D_RESULT res = newVisual->Duplicate(visual);
+                                        if(I3D_SUCCESS(res)) {
+                                            newVisual->LinkTo(visual->GetParent());
+                                            while(visual->NumChildren()) {
+                                                visual->GetChild(0)->LinkTo(newVisual);
+                                            }
+                                            newVisual->Update();
+                                            visual->LinkTo(nullptr);
+                                            visual->Update();
+                                            I3D_frame* modelRoot = nullptr;
+                                            for(modelRoot = newVisual; (modelRoot = modelRoot->GetParent(), modelRoot) && modelRoot->GetType() != FRAME_MODEL;)
+                                                ;
+                                            if(modelRoot) {
+                                                I3D_model* model = (I3D_model*)modelRoot;
+
+                                                model->DeleteFrame(visual);
+                                                model->AddFrame(newVisual);
+                                            }
+
+                                            //frame->Release();
+
+                                            m_SelectedFrame = newVisual;
+                                            ok = true;
+                                        }
+                                    }
+                                }
+                            } else {
+                                ImGui::Text("Lightmapping cannot be done on this visual type!");
+                            }
+                        } else {
+                            ImGui::Checkbox("Bitmap", &bakeBitmap);
+                            ImGui::InputFloat("Scale", &lmSize, 1.0f, 32.0f, "%.1f");
+                            ImGui::Checkbox("Colored edge lines", &coloredEdgeLines);
+                            ImGui::Checkbox("Include all lights", &includeAllLights);
+                            ImGui::Checkbox("Rebuild LM", &recomputeLightmaps);
+
+                            if(ImGui::Button("Bake All LMs")) {
+                                for(I3D_lit_object* obj: m_LightmapObjects) {
+                                    S_vector pos(0, 0, 0);
+
+                                    uint32_t flags = 0;
+
+                                    if(bakeBitmap) { flags |= LM_BITMAP; }
+                                    if(includeAllLights) { flags |= LM_INCLUDELIGHTS; }
+                                    if(coloredEdgeLines) { flags |= LM_DEBUGLINES; }
+                                    if(recomputeLightmaps) { flags |= LM_BUILD; }
+
+                                    obj->Construct(m_Scene, pos, lmSize, flags, NULL, NULL);
+                                }
+                            }
+
+                            if(ImGui::Button("Bake LMs")) {
+                                I3D_lit_object* obj = (I3D_lit_object*)visual;
+
+                                S_vector pos(0, 0, 0);
+
+                                uint32_t flags = 0;
+
+                                if(coloredEdgeLines) { flags |= 0x20; }
+
+                                obj->Construct(m_Scene, pos, lmSize, flags, NULL, NULL);
+                            }
+                        }
+                    } else if(type == FRAME_MODEL) {
+                    }
+                }
+            }
+            ImGui::End();
+        }
     }
 
     if(m_ShowTransformOptions) {
@@ -3040,6 +3325,7 @@ I3D_dummy* SceneEditor::CreateDummy(bool inFrontOfCamera) {
     dummy->LinkTo(m_PrimarySector);
 
     m_Frames.push_back(dummy);
+    m_CreatedFrames.push_back(dummy);
 
     auto psEntry = FindEntryByName("Primary sector");
 
@@ -3070,6 +3356,7 @@ I3D_sound* SceneEditor::CreateSound(const std::string& soundName, bool inFrontOf
     sound->LinkTo(m_PrimarySector);
 
     m_Frames.push_back(sound);
+    m_CreatedFrames.push_back(sound);
 
     auto psEntry = FindEntryByName("Primary sector");
 
@@ -3099,6 +3386,7 @@ I3D_light* SceneEditor::CreateLight(bool inFrontOfCamera) {
     m_PrimarySector->AddLight(light);
 
     m_Frames.push_back(light);
+    m_CreatedFrames.push_back(light);
 
     auto psEntry = FindEntryByName("Primary sector");
 
@@ -3128,6 +3416,7 @@ I3D_model* SceneEditor::CreateModel(const std::string& modelName, bool inFrontOf
     model->LinkTo(m_PrimarySector);
 
     m_Frames.push_back(model);
+    m_CreatedFrames.push_back(model);
 
     auto psEntry = FindEntryByName("Primary sector");
 
@@ -3167,6 +3456,15 @@ SceneEditor::WebNode* SceneEditor::CreateWebNode() {
     m_WebNodes.insert({m_HighestNodeID, {}});
 
     return &m_WebNodes[m_HighestNodeID];
+}
+
+GameScript* SceneEditor::CreateScript() {
+    GameScript& script = m_Scripts.emplace_back();
+    script.frame = nullptr;
+    script.name = "New Script";
+    script.script = "";
+
+    return &script;
 }
 
 void SceneEditor::PasteFrame() {
@@ -3393,6 +3691,18 @@ void SceneEditor::DeleteFrame(I3D_frame* frame) {
             m_CopySelectionType = SEL_NONE;
             m_CopiedObject = nullptr;
         }
+    } else if(frame && it2 != m_Frames.end()) {
+        m_Scene->DeleteFrame(frame);
+        m_CreatedFrames.erase(it);
+        m_Frames.erase(it2);
+        Actor* actor = GetActor(frame);
+        if(actor) { DeleteActor(frame); }
+        frame->Release();
+        if(m_SelectedFrame == frame) { ClearSelection(); }
+        if(m_CopiedObject == frame) {
+            m_CopySelectionType = SEL_NONE;
+            m_CopiedObject = nullptr;
+        }
     } else {
         ShowPopupMessage("Cannot delete a non-deletable frame!");
     }
@@ -3422,12 +3732,15 @@ bool SceneEditor::Load(const std::string& path) {
 
     DrawProgress("Loading: Building scene tree");
     debugPrintf("Building scene tree...");
-
     m_Hierarchy = BuildSceneTree();
 
     DrawProgress("Loading: cache.bin");
     debugPrintf("Loading: cache.bin");
     LoadCacheBin(path + "\\cache.bin");
+
+    DrawProgress("Loading: tree.klz");
+    debugPrintf("Loading: tree.klz");
+    LoadTreeKlz(path + "\\tree.klz");
 
     DrawProgress("Loading: road.bin");
     debugPrintf("Loading: road.bin");
@@ -3689,6 +4002,249 @@ bool SceneEditor::LoadCheckBin(const std::string& fileName) {
     }
 
     return false;
+}
+
+bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
+    BinaryReader reader(fileName);
+    if(!reader.IsOpen()) {
+        debugPrintf("Failed to load %s: Failed to open the file", fileName.c_str());
+        return false;
+    }
+
+    std::string fourCC = reader.ReadFixedString(4);
+    if(fourCC != "GifC") {
+        debugPrintf("Failed to load %s: Not a valid collision file", fileName.c_str());
+        return false;
+    }
+
+    uint32_t version = reader.ReadUInt32();
+    if(version != 0x00000005) { // VERSION_MAFIA
+        debugPrintf("Failed to load %s: Invalid file version", fileName.c_str());
+        return false;
+    }
+
+    uint32_t gridDataOffset = reader.ReadUInt32();
+    uint32_t numLinks = reader.ReadUInt32();
+    m_ColManager.unk1 = reader.ReadUInt32();
+    m_ColManager.unk2 = reader.ReadUInt32();
+
+    std::vector<uint32_t> linkOffsets(numLinks);
+    for(uint32_t& offset: linkOffsets) {
+        offset = reader.ReadUInt32();
+    }
+
+    m_ColManager.links.resize(numLinks);
+    for(size_t i = 0; i < numLinks; ++i) {
+        reader.Seek(linkOffsets[i], SEEK_SET);
+        m_ColManager.links[i].type = reader.ReadUInt32();
+        std::string name = reader.ReadNullTerminatedString();
+        m_ColManager.links[i].frame = FindFrameByName(name);
+        size_t len = name.length() + 1;
+        int padding = static_cast<int>(len % 4);
+        if(padding != 0) { reader.Seek(4 - padding, SEEK_CUR); }
+    }
+
+    reader.Seek(gridDataOffset, SEEK_SET);
+
+    CollisionGrid& grid = m_ColManager.grid;
+    grid.min = reader.ReadVec2();
+    grid.max = reader.ReadVec2();
+    grid.cellSize = reader.ReadVec2();
+    grid.width = reader.ReadUInt32();
+    grid.length = reader.ReadUInt32();
+    grid.unk = reader.ReadSingle();
+
+    reader.Seek(3 * sizeof(int32_t), SEEK_CUR); // Skip 3 int32s for VERSION_MAFIA
+
+    grid.numFaces = reader.ReadUInt32();
+    reader.Seek(4, SEEK_CUR); // Skip reserved pointer
+
+    grid.numXTOBBs = reader.ReadUInt32();
+    reader.Seek(4, SEEK_CUR);
+
+    grid.numAABBs = reader.ReadUInt32();
+    reader.Seek(4, SEEK_CUR);
+
+    grid.numSpheres = reader.ReadUInt32();
+    reader.Seek(4, SEEK_CUR);
+
+    grid.numOBBs = reader.ReadUInt32();
+    reader.Seek(4, SEEK_CUR);
+
+    grid.numCylinders = reader.ReadUInt32();
+    reader.Seek(4, SEEK_CUR);
+
+    reader.Seek(2 * sizeof(int32_t), SEEK_CUR); // Skip 2 int32s for VERSION_MAFIA
+
+    grid.bounds.x.resize(grid.width + 1);
+    for(float& val: grid.bounds.x) {
+        val = reader.ReadSingle();
+    }
+
+    grid.bounds.y.resize(grid.length + 1);
+    for(float& val: grid.bounds.y) {
+        val = reader.ReadSingle();
+    }
+
+    reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
+
+    size_t i = 0;
+
+    m_ColManager.tris.resize(grid.numFaces);
+    for(CollisionTriangle& t: m_ColManager.tris) {
+        t.ReadData(&reader);
+        // No linkID for triangles
+        for(int j = 0; j < 3; ++j) {
+            t.vertices[j].vertexBufferIndex = reader.ReadUInt16();
+            uint16_t linkIndex = reader.ReadUInt16();
+            t.vertices[j].linkedFrame = m_ColManager.links[linkIndex].frame;
+
+            S_vertex_3d* vertices = nullptr;
+            if(t.vertices[j].linkedFrame->GetType() == FRAME_VISUAL) { 
+                I3D_visual* visual = (I3D_visual*)t.vertices[j].linkedFrame;
+
+                if (visual->GetVisualType() == VISUAL_OBJECT || visual->GetVisualType() == VISUAL_LIT_OBJECT) {
+                    I3D_object* obj = (I3D_object*)visual;
+
+                    I3D_mesh_object* mesh = obj->GetMesh();
+
+                    I3D_mesh_level* lod = mesh->GetLOD(0);
+
+                    vertices = lod->LockVertices(1);
+                    t.vertices[j].vertexPos = vertices[t.vertices[j].vertexBufferIndex].pos;
+                    lod->UnlockVertices();
+                }
+            }
+        }
+        HierarchyEntry* entry = FindEntryByFrame(t.vertices[0].linkedFrame);
+        entry->collisions.push_back(&t);
+        t.plane.normal = reader.ReadVec3();
+        t.plane.distance = reader.ReadSingle();
+        m_ColManager.volumes.push_back(&t);
+        i++;
+    }
+
+    i = 0;
+
+    m_ColManager.aabbs.resize(grid.numAABBs);
+    for(CollisionAABB& a: m_ColManager.aabbs) {
+        a.ReadData(&reader);
+        uint32_t linkId = reader.ReadUInt32();
+        a.linkedFrame = m_ColManager.links[linkId].frame;
+        HierarchyEntry* entry = FindEntryByFrame(a.linkedFrame);
+        entry->collisions.push_back(&a);
+        a.min = reader.ReadVec3();
+        a.max = reader.ReadVec3();
+
+        m_ColManager.volumes.push_back(&a);
+        i++;
+    }
+
+    i = 0;
+
+    m_ColManager.xtobbs.resize(grid.numXTOBBs);
+    for(CollisionXTOBB& xt: m_ColManager.xtobbs) {
+        xt.ReadData(&reader);
+        uint32_t linkId = reader.ReadUInt32();
+        xt.linkedFrame = m_ColManager.links[linkId].frame;
+        HierarchyEntry* entry = FindEntryByFrame(xt.linkedFrame);
+        entry->collisions.push_back(&xt);
+        xt.min = reader.ReadVec3();
+        xt.max = reader.ReadVec3();
+        xt.minExtent = reader.ReadVec3();
+        xt.maxExtent = reader.ReadVec3();
+        xt.transform = reader.ReadMatrix();
+        xt.inverseTransform = reader.ReadMatrix();
+
+        m_ColManager.volumes.push_back(&xt);
+        i++;
+    }
+
+    i = 0;
+
+    m_ColManager.cylinders.resize(grid.numCylinders);
+    for(CollisionCylinder& c: m_ColManager.cylinders) {
+        c.ReadData(&reader);
+        uint32_t linkId = reader.ReadUInt32();
+        c.linkedFrame = m_ColManager.links[linkId].frame;
+        HierarchyEntry* entry = FindEntryByFrame(c.linkedFrame);
+        entry->collisions.push_back(&c);
+        c.pos = reader.ReadVec2();
+        c.radius = reader.ReadSingle();
+
+        m_ColManager.volumes.push_back(&c);
+        i++;
+    }
+
+    i = 0;
+
+    m_ColManager.obbs.resize(grid.numOBBs);
+    for(CollisionOBB& o: m_ColManager.obbs) {
+        o.ReadData(&reader);
+        uint32_t linkId = reader.ReadUInt32();
+        o.linkedFrame = m_ColManager.links[linkId].frame;
+        HierarchyEntry* entry = FindEntryByFrame(o.linkedFrame);
+        entry->collisions.push_back(&o);
+        o.minExtent = reader.ReadVec3();
+        o.maxExtent = reader.ReadVec3();
+        o.transform = reader.ReadMatrix();
+        o.inverseTransform = reader.ReadMatrix();
+
+        m_ColManager.volumes.push_back(&o);
+        i++;
+    }
+
+    i = 0;
+
+    m_ColManager.spheres.resize(grid.numSpheres);
+    for(CollisionSphere& s: m_ColManager.spheres) {
+        s.ReadData(&reader);
+        uint32_t linkId = reader.ReadUInt32();
+        s.linkedFrame = m_ColManager.links[linkId].frame;
+        HierarchyEntry* entry = FindEntryByFrame(s.linkedFrame);
+        entry->collisions.push_back(&s);
+        s.pos = reader.ReadVec3();
+        s.radius = reader.ReadSingle();
+
+        m_ColManager.volumes.push_back(&s);
+        i++;
+    }
+
+    reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
+
+    uint32_t numCells = grid.length * grid.width; // No height for VERSION_MAFIA
+    m_ColManager.cells.resize(numCells);
+    for(CollisionCell& cell: m_ColManager.cells) {
+        cell.numReferences = reader.ReadUInt32();
+        cell.unk = reader.ReadInt32();
+        cell.height = reader.ReadSingle();
+        cell.unk2 = reader.ReadInt32(); // Additional unknown for VERSION_MAFIA
+        if(cell.numReferences) {
+            cell.references.resize(cell.numReferences);
+            for(CollisionCell::Reference& ref: cell.references) {
+                int32_t packed = reader.ReadInt32();
+                ref.volumeBufferOffset = packed & 0x00FFFFFF;
+                ref.volumeType = (packed >> 24) & 0xFF;
+            }
+            cell.flags.resize(cell.numReferences);
+            reader.Read(cell.flags.data(), cell.numReferences);
+            int padding = static_cast<int>(cell.numReferences % 4);
+            if(padding != 0) { reader.Seek(4 - padding, SEEK_CUR); }
+        }
+    }
+
+    // Store loaded data into class members as appropriate
+    // e.g., m_CollisionLinks = links;
+    // m_CollisionGrid = grid;
+    // m_CollisionFaces = faces;
+    // m_CollisionAABBs = aabbs;
+    // m_CollisionXTOBBs = xtobbs;
+    // m_CollisionCylinders = cylinders;
+    // m_CollisionOBBs = obbs;
+    // m_CollisionSpheres = spheres;
+    // m_CollisionCells = cells;
+
+    return true;
 }
 
 bool SceneEditor::ReadChunk(E_CHUNK_TYPE chunkType, ChunkReader& chunk) {
@@ -4444,6 +5000,270 @@ void SceneEditor::WriteCheckBin(const std::string& fileName) {
     }
 }
 
+void SceneEditor::WriteTreeKlz(const std::string& fileName) {
+    if(m_ColManager.volumes.empty()) return;
+
+    BinaryWriter writer(fileName);
+    if(writer.IsOpen()) {
+        writer.WriteFixedString("GifC", 4);
+        writer.WriteUInt32(5);
+
+        size_t gridOffsetPlaceholder = writer.GetCurPos();
+        writer.WriteUInt32(0);
+
+        uint32_t numLinks = m_ColManager.links.size();
+        writer.WriteUInt32(numLinks);
+
+        writer.WriteUInt32(m_ColManager.unk1);
+        writer.WriteUInt32(m_ColManager.unk2);
+
+        size_t offsetsPlaceholder = writer.GetCurPos();
+        for(uint32_t i = 0; i < numLinks; ++i) {
+            writer.WriteUInt32(0);
+        }
+
+        std::vector<I3D_frame*> linkFrames;
+
+        m_ColManager.links.clear();
+
+        for(CollisionVolume* volume: m_ColManager.volumes) {
+            switch(volume->type) {
+            case CollisionVolume::VOLUME_FACE0:
+            case CollisionVolume::VOLUME_FACE1:
+            case CollisionVolume::VOLUME_FACE2:
+            case CollisionVolume::VOLUME_FACE3:
+            case CollisionVolume::VOLUME_FACE4:
+            case CollisionVolume::VOLUME_FACE5:
+            case CollisionVolume::VOLUME_FACE6:
+            case CollisionVolume::VOLUME_FACE7: {
+                CollisionTriangle* tri = (CollisionTriangle*)volume;
+
+                I3D_frame* frame = tri->vertices[0].linkedFrame;
+
+                if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
+                    linkFrames.push_back(frame);
+                    m_ColManager.links.push_back({volume->linkType, frame});
+                }
+            } break;
+            case CollisionVolume::VOLUME_AABB: {
+                CollisionAABB* aabb = (CollisionAABB*)volume;
+
+                I3D_frame* frame = aabb->linkedFrame;
+
+                if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
+                    linkFrames.push_back(frame);
+                    m_ColManager.links.push_back({volume->linkType, frame});
+                }
+            } break;
+            case CollisionVolume::VOLUME_XTOBB: {
+                CollisionXTOBB* xtobb = (CollisionXTOBB*)volume;
+
+                I3D_frame* frame = xtobb->linkedFrame;
+
+                if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
+                    linkFrames.push_back(frame);
+                    m_ColManager.links.push_back({volume->linkType, frame});
+                }
+            } break;
+            case CollisionVolume::VOLUME_CYLINDER: {
+                CollisionCylinder* cylinder = (CollisionCylinder*)volume;
+
+                I3D_frame* frame = cylinder->linkedFrame;
+
+                if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
+                    linkFrames.push_back(frame);
+                    m_ColManager.links.push_back({volume->linkType, frame});
+                }
+            } break;
+            case CollisionVolume::VOLUME_OBB: {
+                CollisionOBB* obb = (CollisionOBB*)volume;
+
+                I3D_frame* frame = obb->linkedFrame;
+
+                if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
+                    linkFrames.push_back(frame);
+                    m_ColManager.links.push_back({volume->linkType, frame});
+                }
+            } break;
+            case CollisionVolume::VOLUME_SPHERE: {
+                CollisionSphere* sphere = (CollisionSphere*)volume;
+
+                I3D_frame* frame = sphere->linkedFrame;
+
+                if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
+                    linkFrames.push_back(frame);
+                    m_ColManager.links.push_back({volume->linkType, frame});
+                }
+            } break;
+            }
+        }
+
+        std::vector<uint32_t> actualLinkOffsets(numLinks);
+        for(size_t i = 0; i < numLinks; ++i) {
+            actualLinkOffsets[i] = static_cast<uint32_t>(writer.GetCurPos());
+            writer.WriteUInt32(m_ColManager.links[i].type);
+            std::string name = m_ColManager.links[i].frame->GetName();
+            writer.WriteNullTerminatedString(name);
+            size_t len = name.length() + 1;
+            int padding = static_cast<int>((len % 4) ? 4 - (len % 4) : 0);
+            for(int p = 0; p < padding; ++p) {
+                writer.WriteUInt8(0);
+            }
+        }
+
+        uint32_t gridDataOffset = static_cast<uint32_t>(writer.GetCurPos());
+
+        writer.Seek(offsetsPlaceholder, SEEK_SET);
+        for(uint32_t offset: actualLinkOffsets) {
+            writer.WriteUInt32(offset);
+        }
+
+        writer.Seek(gridOffsetPlaceholder, SEEK_SET);
+        writer.WriteUInt32(gridDataOffset);
+
+        writer.Seek(0, SEEK_END);
+
+        writer.WriteVec2(m_ColManager.grid.min);
+        writer.WriteVec2(m_ColManager.grid.max);
+        writer.WriteVec2(m_ColManager.grid.cellSize);
+        writer.WriteUInt32(m_ColManager.grid.width);
+        writer.WriteUInt32(m_ColManager.grid.length);
+        writer.WriteUInt32(m_ColManager.grid.unk);
+        writer.WriteVec3(m_ColManager.grid.unk2);
+
+        writer.WriteUInt32(m_ColManager.grid.numFaces);
+        writer.WriteUInt32(0);
+        writer.WriteUInt32(m_ColManager.grid.numXTOBBs);
+        writer.WriteUInt32(0);
+        writer.WriteUInt32(m_ColManager.grid.numAABBs);
+        writer.WriteUInt32(0);
+        writer.WriteUInt32(m_ColManager.grid.numSpheres);
+        writer.WriteUInt32(0);
+        writer.WriteUInt32(m_ColManager.grid.numOBBs);
+        writer.WriteUInt32(0);
+        writer.WriteUInt32(m_ColManager.grid.numCylinders);
+        writer.WriteUInt32(0);
+
+        for(int i = 0; i < 2; ++i) {
+            writer.WriteInt32(0);
+        }
+
+        for(float val: m_ColManager.grid.bounds.x) {
+            writer.WriteSingle(val);
+        }
+        for(float val: m_ColManager.grid.bounds.y) {
+            writer.WriteSingle(val);
+        }
+
+        writer.WriteInt32(0);
+
+        for(const CollisionTriangle& t: m_ColManager.tris) {
+            writer.WriteUInt8(static_cast<uint8_t>(t.type));
+            writer.WriteUInt8(t.sortInfo);
+            writer.WriteUInt8(t.flags);
+            writer.WriteUInt8(t.mtlId);
+            for(int j = 0; j < 3; ++j) {
+                writer.WriteUInt16(t.vertices[j].vertexBufferIndex);
+                for(size_t index = 0; index < m_ColManager.links.size(); index++) {
+                    if(m_ColManager.links[index].frame == t.vertices[j].linkedFrame) {
+                        writer.WriteUInt16(static_cast<uint16_t>(index));
+                        break;
+                    }
+                }
+            }
+            writer.WriteVec3(t.plane.normal);
+            writer.WriteSingle(t.plane.distance);
+        }
+
+        for(const CollisionAABB& a: m_ColManager.aabbs) {
+            writer.WriteUInt8(static_cast<uint8_t>(a.type));
+            writer.WriteUInt8(a.sortInfo);
+            writer.WriteUInt8(a.flags);
+            writer.WriteUInt8(a.mtlId);
+            uint32_t linkId = std::distance(linkFrames.begin(), std::find(linkFrames.begin(), linkFrames.end(), a.linkedFrame));
+            writer.WriteUInt32(linkId);
+            writer.WriteVec3(a.min);
+            writer.WriteVec3(a.max);
+        }
+
+        for(const CollisionXTOBB& xt: m_ColManager.xtobbs) {
+            writer.WriteUInt8(static_cast<uint8_t>(xt.type));
+            writer.WriteUInt8(xt.sortInfo);
+            writer.WriteUInt8(xt.flags);
+            writer.WriteUInt8(xt.mtlId);
+            uint32_t linkId = std::distance(linkFrames.begin(), std::find(linkFrames.begin(), linkFrames.end(), xt.linkedFrame));
+            writer.WriteUInt32(linkId);
+            writer.WriteVec3(xt.min);
+            writer.WriteVec3(xt.max);
+            writer.WriteVec3(xt.minExtent); // VECTOR3 for VERSION_MAFIA
+            writer.WriteVec3(xt.maxExtent);
+            writer.WriteMatrix(xt.transform);
+            writer.WriteMatrix(xt.inverseTransform);
+        }
+
+        for(const CollisionCylinder& c: m_ColManager.cylinders) {
+            writer.WriteUInt8(static_cast<uint8_t>(c.type));
+            writer.WriteUInt8(c.sortInfo);
+            writer.WriteUInt8(c.flags);
+            writer.WriteUInt8(c.mtlId);
+            uint32_t linkId = std::distance(linkFrames.begin(), std::find(linkFrames.begin(), linkFrames.end(), c.linkedFrame));
+            writer.WriteUInt32(linkId);
+            writer.WriteVec2(c.pos);
+            writer.WriteSingle(c.radius);
+        }
+
+        for(const CollisionOBB& o: m_ColManager.obbs) {
+            writer.WriteUInt8(static_cast<uint8_t>(o.type));
+            writer.WriteUInt8(o.sortInfo);
+            writer.WriteUInt8(o.flags);
+            writer.WriteUInt8(o.mtlId);
+            uint32_t linkId = std::distance(linkFrames.begin(), std::find(linkFrames.begin(), linkFrames.end(), o.linkedFrame));
+            writer.WriteUInt32(linkId);
+            writer.WriteVec3(o.minExtent);
+            writer.WriteVec3(o.maxExtent);
+            writer.WriteMatrix(o.transform);
+            writer.WriteMatrix(o.inverseTransform);
+        }
+
+        for(const CollisionSphere& s: m_ColManager.spheres) {
+            writer.WriteUInt8(static_cast<uint8_t>(s.type));
+            writer.WriteUInt8(s.sortInfo);
+            writer.WriteUInt8(s.flags);
+            writer.WriteUInt8(s.mtlId);
+            uint32_t linkId = std::distance(linkFrames.begin(), std::find(linkFrames.begin(), linkFrames.end(), s.linkedFrame));
+            writer.WriteUInt32(linkId);
+            writer.WriteVec3(s.pos);
+            writer.WriteSingle(s.radius);
+        }
+
+        writer.WriteInt32(0); // Skipped 1 int32
+
+        // Write cells
+        for(const CollisionCell& cell: m_ColManager.cells) {
+            writer.WriteUInt32(cell.numReferences);
+            writer.WriteInt32(cell.unk);
+            writer.WriteSingle(cell.height);
+            writer.WriteInt32(cell.unk2);
+            if(cell.numReferences) {
+                for(const CollisionCell::Reference& ref: cell.references) {
+                    int32_t packed = (ref.volumeType << 24) | (ref.volumeBufferOffset & 0x00FFFFFF);
+                    writer.WriteInt32(packed);
+                }
+                for(uint8_t flag: cell.flags) {
+                    writer.WriteUInt8(flag);
+                }
+                int padding = static_cast<int>(cell.numReferences % 4);
+                if(padding != 0) {
+                    padding = 4 - padding;
+                    for(int p = 0; p < padding; ++p) {
+                        writer.WriteUInt8(0);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void SceneEditor::Save(const std::string& path) {
     SelectFrame(m_SelectedFrame);
 
@@ -4453,6 +5273,7 @@ void SceneEditor::Save(const std::string& path) {
 
     if(!std::filesystem::exists(path)) { std::filesystem::create_directories(path); }
     WriteSceneBin(path + "\\scene2.bin");
+    WriteTreeKlz(path + "\\tree.klz");
     WriteRoadBin(path + "\\road.bin");
     WriteCheckBin(path + "\\check.bin");
     WriteCacheBin(path + "\\cache.bin");
@@ -4513,6 +5334,8 @@ void SceneEditor::Clear() {
         m_RoadCrosspoints.clear();
         m_AnimatedModels.clear();
         m_LightmapObjects.clear();
+
+        m_ColManager.Clear();
 
         g_ModelsMap.clear();
         g_SoundsMap.clear();

@@ -178,6 +178,9 @@ struct S_quat {
 
 struct S_plane {
     __declspec(dllexport) bool __stdcall IntersectionLine(const S_plane& plane, S_vector& v1, S_vector& v2) const;
+
+    S_vector normal;
+    float distance;
 };
 
 struct S_matrix {

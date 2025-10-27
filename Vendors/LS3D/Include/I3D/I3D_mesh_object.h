@@ -17,10 +17,16 @@ struct I3D_stats_mesh {
     uint32_t unk4;
 };
 
+struct S_vertex_3d {
+    S_vector pos;
+    S_vector normal;
+    S_vector2 uv;
+};
+
 class I3D_mesh_level {
   public:
     virtual int __stdcall Release();
-    virtual void* __stdcall LockVertices(uint32_t flags);
+    virtual S_vertex_3d* __stdcall LockVertices(uint32_t flags);
     virtual void __stdcall UnlockVertices();
     virtual LS3D_RESULT __stdcall Duplicate(I3D_mesh_level* other);
     virtual uint32_t __stdcall NumFaces();

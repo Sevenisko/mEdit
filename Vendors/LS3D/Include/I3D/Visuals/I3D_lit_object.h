@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <LS3D.h>
 #include <I3D/Visuals/I3D_object.h>
@@ -19,7 +19,7 @@ struct ColorRGB {
 
 typedef enum BitmapType : uint8_t { LM_BITMAP_TYPE_BITMAP = 0, LM_BITMAP_TYPE_COLOR = 1 } BitmapType;
 
-typedef enum : uint8_t { LM_VERTEX = 1 << 0, LM_BITMAP = 1 << 1, LM_BUILD = 1 << 2 } LightmapLevelFlags;
+typedef enum : uint8_t { LM_VERTEX = 1 << 0, LM_BITMAP = 1 << 1, LM_BUILD = 1 << 2, LM_INCLUDELIGHTS = 1 << 4, LM_DEBUGLINES = 1 << 5 } LightmapFlags;
 
 class I3D_mesh_object;
 
@@ -99,8 +99,6 @@ class I3D_lit_object : public I3D_object {
         }
         return numLevels;
     }
-
-    // TODO: Find out why the output is unreadable by LS3D
 
     LS3D_RESULT __stdcall CustomSave(BinaryWriter* writer) {
         if(!writer || !writer->IsOpen()) {
@@ -217,7 +215,7 @@ class I3D_lit_object : public I3D_object {
 
                     // Reverse the postLoadProcess adjustment to write pre-adjusted (per-bitmap) UVs
                     S_vector2* writeUVs = lod->LitUVs; // Default to existing
-                    if(lod->lightMap) { // Atlas exists, so m_pLitUV is post-adjusted�reverse to per-bitmap UVs
+                    if(lod->lightMap) { // Atlas exists, so m_pLitUV is post-adjusted—reverse to per-bitmap UVs
                         // Atlas width/height from lightMap data (offsets match decomp: +40/+42 from inner ptr)
                         void* atlasData = *reinterpret_cast<void**>(lod->lightMap);
                         float atlasScaleX = 1.0f / static_cast<float>(*reinterpret_cast<uint16_t*>((uintptr_t)atlasData + 40));

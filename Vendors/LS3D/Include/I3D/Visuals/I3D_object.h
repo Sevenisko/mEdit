@@ -19,6 +19,8 @@ class I3D_object : public I3D_visual {
     virtual void __stdcall SetLightness(float lightness);
     virtual void __stdcall SetTransparency(float transparency);
 
+    inline I3D_mesh_object* GetMesh() const { return m_pMesh; }
+
   protected:
     uint8_t pad[88];
     I3D_mesh_object* m_pMesh;

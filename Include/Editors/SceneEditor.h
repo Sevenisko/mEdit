@@ -47,6 +47,7 @@ enum MenuCommand {
     // View menu
     MCMD_VIEW_WEBNODES = 200,
     MCMD_VIEW_ROADPOINTS,
+    MCMD_VIEW_COLLISIONS,
 
     // Edit menu
     MCMD_EDIT_UNDO = 300,
@@ -79,6 +80,7 @@ enum MenuCommand {
     // Create menu
     MCMD_CREATE_WEBNODE = 480,
     MCMD_CREATE_SCRIPT,
+    MCMD_CREATE_LIGHTMAP,
 
     // Help menu
     MCMD_HELP_ABOUT = 500
@@ -178,9 +180,13 @@ class SceneEditor {
 
     bool IsOpened() const { return !m_MissionPath.empty(); }
 
+    bool IsShowingLightmapDialog() const { return m_ShowLightmapDialog; }
+
     std::string GetMissionPath() const { return m_MissionPath; }
 
     ScriptEditor* GetScriptEditor() { return &m_ScriptEditor; }
+
+    void ShowLightmapDialog() { m_ShowLightmapDialog = true; }
 
     bool ToggleWebView() {
         m_DrawWebNodes = !m_DrawWebNodes;
@@ -202,6 +208,16 @@ class SceneEditor {
         return m_DrawRoadPoints;
     }
 
+    bool ToggleCollisionView() {
+        m_DrawCollisions = !m_DrawCollisions;
+
+        UINT state = m_DrawCollisions ? MF_CHECKED : MF_UNCHECKED;
+
+        CheckMenuItem(m_ViewMenu, MCMD_VIEW_COLLISIONS, MF_BYCOMMAND | state);
+
+        return m_DrawCollisions;
+    }
+
     HWND GetWindowHandle() const { return m_IGraph->GetMainHWND(); }
 
     ImGuiContext* GetImGuiContext() const { return m_ImGuiContext; }
@@ -217,8 +233,6 @@ class SceneEditor {
     }
 
     void SelectFrame(I3D_frame* frame) {
-        ClearSelection();
-
         if(m_SelectedFrame && strcmp(m_SelectedFrameName, m_SelectedFrame->m_pSzName) != 0) {
             auto entry = FindEntryByName(m_SelectedFrame->m_pSzName);
 
@@ -226,6 +240,8 @@ class SceneEditor {
 
             m_SelectedFrame->SetName(m_SelectedFrameName);
         }
+
+        ClearSelection();
 
         m_SelectedFrame = frame;
 
@@ -266,10 +282,16 @@ class SceneEditor {
         m_ShowTransformOptions = true;
     }
 
+    void SelectScript(GameScript* script) {
+        m_SelectionType = SEL_SCRIPT;
+        m_SelectedScript = script;
+    }
+
     I3D_frame* GetSelectedFrame() const { return m_SelectedFrame; }
     RoadCrosspoint* GetSelectedCrosspoint() const { return m_SelectedCrosspoint; }
     RoadWaypoint* GetSelectedWaypoint() const { return m_SelectedWaypoint; }
     WebNode* GetSelectedWebNode() const { return m_SelectedNode; }
+    GameScript* GetSelectedScript() const { return m_SelectedScript; }
 
     I3D_dummy* CreateDummy(bool inFrontOfCamera = false);
     I3D_sound* CreateSound(const std::string& soundName, bool inFrontOfCamera = false);
@@ -279,6 +301,7 @@ class SceneEditor {
     RoadCrosspoint* CreateCrosspoint();
     RoadWaypoint* CreateWaypoint();
     WebNode* CreateWebNode();
+    GameScript* CreateScript();
 
     void IterateFrames(I3D_frame* frame, I3D_FRAME_TYPE type);
 
@@ -368,22 +391,108 @@ class SceneEditor {
             VOLUME_CYLINDER = 0x84
         } type;
 
+        std::string GetTypeAsString() {
+            switch(type) {
+            case VOLUME_FACE0: return "Face 0";
+            case VOLUME_FACE1: return "Face 1";
+            case VOLUME_FACE2: return "Face 2";
+            case VOLUME_FACE3: return "Face 3";
+            case VOLUME_FACE4: return "Face 4";
+            case VOLUME_FACE5: return "Face 5";
+            case VOLUME_FACE6: return "Face 6";
+            case VOLUME_FACE7: return "Face 7";
+            case VOLUME_XTOBB: return "XTOBB";
+            case VOLUME_AABB: return "AABB";
+            case VOLUME_SPHERE: return "Sphere";
+            case VOLUME_OBB: return "OBB";
+            case VOLUME_CYLINDER: return "Cylinder";
+            }
+
+            return "";
+        }
+
         uint8_t sortInfo;
         uint8_t flags;
         uint8_t mtlId;
-        uint32_t linkId;
+        I3D_frame* linkedFrame = nullptr;
+        uint32_t linkType = 0;
+
+        void ReadData(BinaryReader* reader) {
+            type = static_cast<CollisionVolume::VolumeType>(reader->ReadUInt8());
+            sortInfo = reader->ReadUInt8();
+            flags = reader->ReadUInt8();
+            mtlId = reader->ReadUInt8();
+        }
+        void WriteData(BinaryWriter* writer) {
+            writer->WriteUInt8(static_cast<uint8_t>(type));
+            writer->WriteUInt8(sortInfo);
+            writer->WriteUInt8(flags);
+            writer->WriteUInt8(mtlId);
+        }
+    };
+
+    struct CollisionTriangle : public CollisionVolume {
+        struct VertexLink {
+            uint16_t vertexBufferIndex = 0xFFFF;
+            S_vector vertexPos{0, 0, 0};
+            I3D_frame* linkedFrame = nullptr;
+        } vertices[3];
+
+        S_vector CalculateCentroid() { return (vertices[0].vertexPos + vertices[1].vertexPos + vertices[2].vertexPos) * (1.0f / 3.0f); }
+
+        S_plane plane;
+    };
+
+    struct CollisionXTOBB : public CollisionVolume {
+        S_vector min, max, minExtent, maxExtent;
+        S_matrix transform, inverseTransform;
+    };
+
+    struct CollisionAABB : public CollisionVolume {
+        S_vector min, max;
+    };
+
+    struct CollisionSphere : public CollisionVolume {
+        S_vector pos;
+        float radius;
+    };
+
+    struct CollisionOBB : public CollisionVolume {
+        S_vector minExtent, maxExtent;
+
+        S_matrix transform, inverseTransform;
+    };
+
+    struct CollisionCylinder : public CollisionVolume {
+        S_vector2 pos;
+        float radius;
     };
 
     struct CollisionLink {
         uint32_t type;
-        std::string name;
+        I3D_frame* frame;
+    };
+
+    struct CollisionCell {
+        uint32_t numReferences;
+        int unk;
+        float height;
+        int unk2;
+
+        struct Reference {
+            int volumeBufferOffset;
+            int volumeType;
+        };
+        std::vector<Reference> references;
+        std::vector<uint8_t> flags;
     };
 
     struct CollisionGrid {
         S_vector2 min;
         S_vector2 max;
         S_vector2 cellSize;
-        S_vector2 size;
+        uint32_t width;
+        uint32_t length;
         float unk;
         S_vector unk2;
         uint32_t numFaces;
@@ -398,11 +507,58 @@ class SceneEditor {
         } bounds;
     };
 
+    struct CollisionHeader {
+        uint32_t version;
+        uint32_t gridDataOffset;
+        uint32_t numLinks;
+    };
+
+    struct CollisionManager {
+        void Clear() {
+            ZeroMemory(&header, sizeof(CollisionHeader));
+
+            unk1 = unk2 = 0;
+
+            links.clear();
+
+            grid.bounds.x.clear();
+            grid.bounds.y.clear();
+            ZeroMemory(&grid, sizeof(CollisionGrid) - sizeof(CollisionGrid::Bounds));
+
+            tris.clear();
+            aabbs.clear();
+            xtobbs.clear();
+            cylinders.clear();
+            obbs.clear();
+            spheres.clear();
+
+            cells.clear();
+        }
+
+        CollisionHeader header;
+        std::vector<CollisionLink> links;
+        CollisionGrid grid;
+
+        uint32_t unk1, unk2;
+
+        std::vector<CollisionVolume*> volumes;
+
+        std::vector<CollisionTriangle> tris;
+        std::vector<CollisionAABB> aabbs;
+        std::vector<CollisionXTOBB> xtobbs;
+        std::vector<CollisionCylinder> cylinders;
+        std::vector<CollisionOBB> obbs;
+        std::vector<CollisionSphere> spheres;
+
+        std::vector<CollisionCell> cells;
+    };
+
     struct HierarchyEntry {
-        std::string name;
-        I3D_frame* frame;
-        Actor* actor;
-        HierarchyEntry* parent;
+        std::string name = "";
+        I3D_frame* frame = nullptr;
+        Actor* actor = nullptr;
+        HierarchyEntry* parent = nullptr;
+        std::vector<CollisionVolume*> collisions;
         std::vector<HierarchyEntry> children;
     };
 
@@ -663,6 +819,7 @@ class SceneEditor {
 
     void DrawWireframeBox(const I3D_bbox& bbox, const S_vector& color, uint8_t alpha);
     void DrawWireframeCone(const S_vector& pos, const S_vector& dir, float radius, float height, const S_vector& color, uint8_t alpha, int segments = 16);
+    void DrawWireframeCylinder(const S_vector& basePos, float radius, float height, const S_vector& color, uint32_t alpha, int segments = 16);
     void DrawWireframeFrustum(const S_vector& pos,
                               const S_vector& dir,
                               float widthTop,
@@ -677,11 +834,13 @@ class SceneEditor {
     bool LoadCacheBin(const std::string& fileName);
     bool LoadRoadBin(const std::string& fileName);
     bool LoadCheckBin(const std::string& fileName);
+    bool LoadTreeKlz(const std::string& fileName);
     bool ReadChunk(E_CHUNK_TYPE chunkType, ChunkReader& chunk);
     void WriteSceneBin(const std::string& fileName);
     void WriteCacheBin(const std::string& fileName);
     void WriteRoadBin(const std::string& fileName);
     void WriteCheckBin(const std::string& fileName);
+    void WriteTreeKlz(const std::string& fileName);
 
     void WriteFrameRecursively(I3D_frame* frame, ChunkWriter& chunk, bool writeParent = false);
     void WriteFrame(I3D_frame* frame, ChunkWriter& chunk, bool forceWrite = false);
@@ -759,7 +918,6 @@ class SceneEditor {
                     this->userDataType = userDataType;
                 }
             }
-            
         }
         ~Modification() {
             if(this->payloadData) {
@@ -875,6 +1033,8 @@ class SceneEditor {
 
     std::vector<HierarchyEntry> m_Hierarchy;
 
+    CollisionManager m_ColManager;
+
     bool m_KeyboardEnabled = false;
     bool m_MouseEnabled = false;
 
@@ -883,6 +1043,7 @@ class SceneEditor {
 
     bool m_DrawWebNodes = false;
     bool m_DrawRoadPoints = false;
+    bool m_DrawCollisions = false;
 
     bool m_DrawPopupMessage = false;
     float m_PopupMessageTime = 0;
@@ -916,4 +1077,6 @@ class SceneEditor {
     bool m_TransformGridSnapping = false;
     float m_GridScale = 1.0f;
     int m_GridSize = 64;
+
+    bool m_ShowLightmapDialog = false;
 };
