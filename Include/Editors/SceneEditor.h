@@ -469,7 +469,11 @@ class SceneEditor {
     };
 
     struct CollisionLink {
-        uint32_t type;
+        enum LinkType {
+            LINK_NONE,
+            LINK_SURFACE,
+            LINK_VOLUME
+        } type;
         I3D_frame* frame;
     };
 

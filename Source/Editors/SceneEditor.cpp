@@ -4147,7 +4147,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
     m_ColManager.links.resize(numLinks);
     for(size_t i = 0; i < numLinks; ++i) {
         reader.Seek(linkOffsets[i], SEEK_SET);
-        m_ColManager.links[i].type = reader.ReadUInt32();
+        m_ColManager.links[i].type = (CollisionLink::LinkType)reader.ReadUInt32();
         std::string name = reader.ReadNullTerminatedString();
         m_ColManager.links[i].frame = FindFrameByName(name);
         size_t len = name.length() + 1;
@@ -5153,7 +5153,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
                 if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
                     linkFrames.push_back(frame);
-                    m_ColManager.links.push_back({volume->linkType, frame});
+                    m_ColManager.links.push_back({CollisionLink::LINK_SURFACE, frame});
                 }
             } break;
             case CollisionVolume::VOLUME_AABB: {
@@ -5163,7 +5163,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
                 if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
                     linkFrames.push_back(frame);
-                    m_ColManager.links.push_back({volume->linkType, frame});
+                    m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
             case CollisionVolume::VOLUME_XTOBB: {
@@ -5173,7 +5173,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
                 if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
                     linkFrames.push_back(frame);
-                    m_ColManager.links.push_back({volume->linkType, frame});
+                    m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
             case CollisionVolume::VOLUME_CYLINDER: {
@@ -5183,7 +5183,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
                 if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
                     linkFrames.push_back(frame);
-                    m_ColManager.links.push_back({volume->linkType, frame});
+                    m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
             case CollisionVolume::VOLUME_OBB: {
@@ -5193,7 +5193,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
                 if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
                     linkFrames.push_back(frame);
-                    m_ColManager.links.push_back({volume->linkType, frame});
+                    m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
             case CollisionVolume::VOLUME_SPHERE: {
@@ -5203,7 +5203,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
                 if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
                     linkFrames.push_back(frame);
-                    m_ColManager.links.push_back({volume->linkType, frame});
+                    m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
             }
