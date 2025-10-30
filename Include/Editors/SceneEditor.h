@@ -415,7 +415,6 @@ class SceneEditor {
         uint8_t flags;
         uint8_t mtlId;
         I3D_frame* linkedFrame = nullptr;
-        uint32_t linkType = 0;
 
         void ReadData(BinaryReader* reader) {
             type = static_cast<CollisionVolume::VolumeType>(reader->ReadUInt8());
@@ -431,7 +430,35 @@ class SceneEditor {
         }
     };
 
-    struct CollisionTriangle : public CollisionVolume {
+    struct CollisionMesh : public CollisionVolume {
+        struct Triangle {
+            uint16_t indices[3];
+            S_vector positions[3];
+
+            S_plane plane;
+        };
+
+        std::vector<Triangle> tris;
+        I3D_frame* linkedFrame = nullptr;
+    };
+
+    CollisionMesh* GetMeshCollider(I3D_frame* frame) {
+        for(CollisionMesh& collider: m_ColManager.meshes) {
+            if(collider.linkedFrame == frame) return &collider;
+        }
+
+        return nullptr;
+    }
+
+    bool IsMeshColliderPresent(I3D_frame* frame) const {
+        for (const CollisionMesh& collider : m_ColManager.meshes) {
+            if(collider.linkedFrame == frame) return true;
+        }
+
+        return false;
+    }
+
+    /*struct CollisionTriangle : public CollisionVolume {
         struct VertexLink {
             uint16_t vertexBufferIndex = 0xFFFF;
             S_vector vertexPos{0, 0, 0};
@@ -441,7 +468,7 @@ class SceneEditor {
         S_vector CalculateCentroid() { return (vertices[0].vertexPos + vertices[1].vertexPos + vertices[2].vertexPos) * (1.0f / 3.0f); }
 
         S_plane plane;
-    };
+    };*/
 
     struct CollisionXTOBB : public CollisionVolume {
         S_vector min, max, minExtent, maxExtent;
@@ -478,10 +505,10 @@ class SceneEditor {
     };
 
     struct CollisionCell {
-        uint32_t numReferences;
-        int unk;
+        uint32_t numVolumes;
+        int reserved;
         float height;
-        int unk2;
+        float width;
 
         struct Reference {
             int volumeBufferOffset;
@@ -529,7 +556,7 @@ class SceneEditor {
             grid.bounds.y.clear();
             ZeroMemory(&grid, sizeof(CollisionGrid) - sizeof(CollisionGrid::Bounds));
 
-            tris.clear();
+            meshes.clear();
             aabbs.clear();
             xtobbs.clear();
             cylinders.clear();
@@ -547,7 +574,7 @@ class SceneEditor {
 
         std::vector<CollisionVolume*> volumes;
 
-        std::vector<CollisionTriangle> tris;
+        std::vector<CollisionMesh> meshes;
         std::vector<CollisionAABB> aabbs;
         std::vector<CollisionXTOBB> xtobbs;
         std::vector<CollisionCylinder> cylinders;

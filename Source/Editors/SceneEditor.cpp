@@ -1647,30 +1647,31 @@ void SceneEditor::Update() {
             std::vector<uint16_t> indices;
             uint16_t vertOffset = 0;
 
-            for(CollisionTriangle& tri: m_ColManager.tris) {
-                S_vector framePos = tri.vertices[0].linkedFrame->GetWorldPos();
-                S_vector pos = framePos + tri.CalculateCentroid();
+            for(CollisionMesh& mesh: m_ColManager.meshes) {
+                S_vector pos = mesh.linkedFrame->GetWorldPos();
                 float dist = (m_CameraPos - pos).Magnitude();
 
                 if(dist <= 64) {
-                    S_matrix worldMat = tri.vertices[0].linkedFrame->GetWorldMat();
+                    S_matrix worldMat = mesh.linkedFrame->GetWorldMat();
 
-                    S_vector w0 = tri.vertices[0].vertexPos * worldMat;
-                    S_vector w1 = tri.vertices[1].vertexPos * worldMat;
-                    S_vector w2 = tri.vertices[2].vertexPos * worldMat;
+                    for (CollisionMesh::Triangle& tri : mesh.tris) {
+                        S_vector w0 = tri.positions[0] * worldMat;
+                        S_vector w1 = tri.positions[1] * worldMat;
+                        S_vector w2 = tri.positions[2] * worldMat;
 
-                    lineVerts.push_back({w0.x, w0.y, w0.z, 0});
-                    lineVerts.push_back({w1.x, w1.y, w1.z, 0});
-                    lineVerts.push_back({w2.x, w2.y, w2.z, 0});
+                        lineVerts.push_back({w0.x, w0.y, w0.z, 0});
+                        lineVerts.push_back({w1.x, w1.y, w1.z, 0});
+                        lineVerts.push_back({w2.x, w2.y, w2.z, 0});
 
-                    indices.push_back(vertOffset + 0);
-                    indices.push_back(vertOffset + 1);
-                    indices.push_back(vertOffset + 1);
-                    indices.push_back(vertOffset + 2);
-                    indices.push_back(vertOffset + 2);
-                    indices.push_back(vertOffset + 0);
+                        indices.push_back(vertOffset + 0);
+                        indices.push_back(vertOffset + 1);
+                        indices.push_back(vertOffset + 1);
+                        indices.push_back(vertOffset + 2);
+                        indices.push_back(vertOffset + 2);
+                        indices.push_back(vertOffset + 0);
 
-                    vertOffset += 3;
+                        vertOffset += 3;
+                    }
                 }
             }
 
@@ -4199,13 +4200,25 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
 
     reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
 
-    size_t i = 0;
+    
+    CollisionMesh* curMesh = nullptr;
 
-    m_ColManager.tris.resize(grid.numFaces);
-    for(CollisionTriangle& t: m_ColManager.tris) {
+    struct CollisionTriangle : public CollisionVolume {
+        struct VertexLink {
+            uint16_t vertexBufferIndex = 0xFFFF;
+            S_vector vertexPos{0, 0, 0};
+            I3D_frame* linkedFrame = nullptr;
+        } vertices[3];
+
+        S_plane plane;
+    };
+
+    for(int i = 0; i < grid.numFaces; i++) {
+        CollisionTriangle t;
+
         t.ReadData(&reader);
         // No linkID for triangles
-        for(int j = 0; j < 3; ++j) {
+        for(int j = 0; j < 3; j++) {
             t.vertices[j].vertexBufferIndex = reader.ReadUInt16();
             uint16_t linkIndex = reader.ReadUInt16();
             t.vertices[j].linkedFrame = m_ColManager.links[linkIndex].frame;
@@ -4227,15 +4240,43 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
                 }
             }
         }
-        HierarchyEntry* entry = FindEntryByFrame(t.vertices[0].linkedFrame);
-        entry->collisions.push_back(&t);
+        
         t.plane.normal = reader.ReadVec3();
         t.plane.distance = reader.ReadSingle();
-        m_ColManager.volumes.push_back(&t);
-        i++;
+        
+        if(!IsMeshColliderPresent(t.vertices[0].linkedFrame)) {
+            HierarchyEntry* entry = FindEntryByFrame(t.vertices[0].linkedFrame);
+
+            CollisionMesh& collider = m_ColManager.meshes.emplace_back();
+
+            collider.sortInfo = t.sortInfo;
+            collider.flags = t.flags;
+            collider.mtlId = t.mtlId;
+
+            collider.linkedFrame = t.vertices[0].linkedFrame;
+
+            CollisionMesh::Triangle& tri = collider.tris.emplace_back();
+            for(int j = 0; j < 3; j++) {
+                tri.indices[j] = t.vertices[j].vertexBufferIndex;
+                tri.positions[j] = t.vertices[j].vertexPos;
+                tri.plane = t.plane;
+            }
+
+            entry->collisions.push_back(&collider);
+        }
+        else {
+            CollisionMesh* collider = GetMeshCollider(t.vertices[0].linkedFrame);
+
+            CollisionMesh::Triangle& tri = collider->tris.emplace_back();
+            for (int j = 0; j < 3; j++) {
+                tri.indices[j] = t.vertices[j].vertexBufferIndex;
+                tri.positions[j] = t.vertices[j].vertexPos;
+                tri.plane = t.plane;
+            }
+        }
     }
 
-    i = 0;
+    size_t i = 0;
 
     m_ColManager.aabbs.resize(grid.numAABBs);
     for(CollisionAABB& a: m_ColManager.aabbs) {
@@ -4321,25 +4362,25 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         i++;
     }
 
-    reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
+    reader.Seek(sizeof(int32_t), SEEK_CUR);
 
-    uint32_t numCells = grid.length * grid.width; // No height for VERSION_MAFIA
+    uint32_t numCells = grid.length * grid.width;
     m_ColManager.cells.resize(numCells);
     for(CollisionCell& cell: m_ColManager.cells) {
-        cell.numReferences = reader.ReadUInt32();
-        cell.unk = reader.ReadInt32();
+        cell.numVolumes = reader.ReadUInt32();
+        cell.reserved = reader.ReadInt32();
         cell.height = reader.ReadSingle();
-        cell.unk2 = reader.ReadInt32(); // Additional unknown for VERSION_MAFIA
-        if(cell.numReferences) {
-            cell.references.resize(cell.numReferences);
+        cell.width = reader.ReadSingle();
+        if(cell.numVolumes) {
+            cell.references.resize(cell.numVolumes);
             for(CollisionCell::Reference& ref: cell.references) {
                 int32_t packed = reader.ReadInt32();
                 ref.volumeBufferOffset = packed & 0x00FFFFFF;
                 ref.volumeType = (packed >> 24) & 0xFF;
             }
-            cell.flags.resize(cell.numReferences);
-            reader.Read(cell.flags.data(), cell.numReferences);
-            int padding = static_cast<int>(cell.numReferences % 4);
+            cell.flags.resize(cell.numVolumes);
+            reader.Read(cell.flags.data(), cell.numVolumes);
+            int padding = static_cast<int>(cell.numVolumes % 4);
             if(padding != 0) { reader.Seek(4 - padding, SEEK_CUR); }
         }
     }
@@ -5147,9 +5188,9 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             case CollisionVolume::VOLUME_FACE5:
             case CollisionVolume::VOLUME_FACE6:
             case CollisionVolume::VOLUME_FACE7: {
-                CollisionTriangle* tri = (CollisionTriangle*)volume;
+                CollisionMesh* collider = (CollisionMesh*)volume;
 
-                I3D_frame* frame = tri->vertices[0].linkedFrame;
+                I3D_frame* frame = collider->linkedFrame;
 
                 if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
                     linkFrames.push_back(frame);
@@ -5268,29 +5309,26 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
         writer.WriteInt32(0);
 
-        for(const CollisionTriangle& t: m_ColManager.tris) {
-            writer.WriteUInt8(static_cast<uint8_t>(t.type));
-            writer.WriteUInt8(t.sortInfo);
-            writer.WriteUInt8(t.flags);
-            writer.WriteUInt8(t.mtlId);
-            for(int j = 0; j < 3; ++j) {
-                writer.WriteUInt16(t.vertices[j].vertexBufferIndex);
-                for(size_t index = 0; index < m_ColManager.links.size(); index++) {
-                    if(m_ColManager.links[index].frame == t.vertices[j].linkedFrame) {
-                        writer.WriteUInt16(static_cast<uint16_t>(index));
-                        break;
+        for(CollisionMesh& m: m_ColManager.meshes) {
+            for (CollisionMesh::Triangle& tri : m.tris) {
+                m.WriteData(&writer);
+                for(int j = 0; j < 3; j++) {
+                    writer.WriteUInt16(tri.indices[j]);
+                    for(size_t index = 0; index < m_ColManager.links.size(); index++) {
+                        if(m_ColManager.links[index].frame == m.linkedFrame) {
+                            writer.WriteUInt16(static_cast<uint16_t>(index));
+                            break;
+                        }
                     }
                 }
-            }
-            writer.WriteVec3(t.plane.normal);
-            writer.WriteSingle(t.plane.distance);
+
+                writer.WriteVec3(tri.plane.normal);
+                writer.WriteSingle(tri.plane.distance);
+            }            
         }
 
-        for(const CollisionAABB& a: m_ColManager.aabbs) {
-            writer.WriteUInt8(static_cast<uint8_t>(a.type));
-            writer.WriteUInt8(a.sortInfo);
-            writer.WriteUInt8(a.flags);
-            writer.WriteUInt8(a.mtlId);
+        for(CollisionAABB& a: m_ColManager.aabbs) {
+            a.WriteData(&writer);
             uint32_t linkId = std::distance(linkFrames.begin(), std::find(linkFrames.begin(), linkFrames.end(), a.linkedFrame));
             writer.WriteUInt32(linkId);
             writer.WriteVec3(a.min);
@@ -5351,11 +5389,11 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
         // Write cells
         for(const CollisionCell& cell: m_ColManager.cells) {
-            writer.WriteUInt32(cell.numReferences);
-            writer.WriteInt32(cell.unk);
+            writer.WriteUInt32(cell.numVolumes);
+            writer.WriteInt32(cell.reserved);
             writer.WriteSingle(cell.height);
-            writer.WriteInt32(cell.unk2);
-            if(cell.numReferences) {
+            writer.WriteSingle(cell.width);
+            if(cell.numVolumes) {
                 for(const CollisionCell::Reference& ref: cell.references) {
                     int32_t packed = (ref.volumeType << 24) | (ref.volumeBufferOffset & 0x00FFFFFF);
                     writer.WriteInt32(packed);
@@ -5363,7 +5401,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                 for(uint8_t flag: cell.flags) {
                     writer.WriteUInt8(flag);
                 }
-                int padding = static_cast<int>(cell.numReferences % 4);
+                int padding = static_cast<int>(cell.numVolumes % 4);
                 if(padding != 0) {
                     padding = 4 - padding;
                     for(int p = 0; p < padding; ++p) {
