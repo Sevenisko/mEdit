@@ -32,3 +32,21 @@ class I3D_visual : public I3D_frame, public I3D_void_interface {
   private:
     __declspec(dllexport) void __stdcall UpdateWBoundProc();
 };
+
+static const char* GetVisualTypeName(I3D_VISUAL_TYPE type) {
+    switch(type) {
+    case VISUAL_LIT_OBJECT: return "Lit Object";
+    case VISUAL_PROJECTOR: return "Projector";
+    case VISUAL_SINGLE_MESH: return "Single Mesh";
+    case VISUAL_MORPH: return "Morph";
+    case VISUAL_PART_ELEMENT_BASE: return "Particle Element Base";
+    case VISUAL_BILLBOARD: return "Billboard";
+    case VISUAL_PART_ELEMENT: return "Particle Element";
+    case VISUAL_MIRROR: return "Mirror";
+    case VISUAL_LAND_PATCH: return "Land Patch";
+    case VISUAL_SINGLE_MORPH: return "Single Morph";
+    case VISUAL_LENSFLARE: return "Lens Flare";
+    case VISUAL_OBJECT: return "Object";
+    default: return "Unknown";
+    }
+}

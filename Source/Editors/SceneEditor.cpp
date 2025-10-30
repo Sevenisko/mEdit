@@ -378,7 +378,7 @@ void SceneEditor::ShowFrameEntry(const HierarchyEntry& entry) {
     // Show tooltip on hover with Shift
     if(ImGui::IsItemHovered() && ImGui::GetIO().KeyShift) {
         ImGui::BeginTooltip();
-        ImGui::Text("Frame type: %s", g_pSzFrameNames[entry.frame->GetType()]);
+        ImGui::Text("Frame type: %s", GetFrameTypeName(entry.frame->GetType()));
         ImGui::EndTooltip();
     }
 
@@ -1308,6 +1308,43 @@ void SceneEditor::DrawWireframeFrustum(const S_vector& pos,
 
 float g_FramerateUpdateTime = 0;
 
+struct PickHit {
+    I3D_frame* frame = nullptr;
+    float dist = FLT_MAX;
+    S_vector hitPos = {0, 0, 0};
+};
+
+PickHit g_BestHit;
+S_vector g_RayOrigin{0, 0, 0}, g_RayDir{0, 0, 0};
+
+I3DENUMRET __stdcall EnumSceneFrames(I3D_frame* frame, uint32_t user) {
+    SceneEditor* editor = (SceneEditor*)user;
+
+    if(frame->GetType() != FRAME_VISUAL) { return I3DENUMRET_OK; }
+    if(!editor->GetScene()->TestVisibility(frame, editor->GetCamera())) { return I3DENUMRET_OK; }
+
+    I3D_visual* visual = (I3D_visual*)frame;
+    if(visual->GetVisualType() != VISUAL_OBJECT && visual->GetVisualType() != VISUAL_LIT_OBJECT) { return I3DENUMRET_OK; }
+
+    const auto& worldBVol = frame->m_sWorldBVol;
+    float tHit;
+    if((tHit = RayAABB_HitDist(g_RayOrigin, g_RayDir, worldBVol.bbox.min, worldBVol.bbox.max, g_BestHit.dist)) < 0) { return I3DENUMRET_OK; }
+
+    I3D_object* obj = (I3D_object*)visual;
+    I3D_mesh_object* mesh = obj->GetMesh();
+
+    if(!mesh) { return I3DENUMRET_OK; }
+
+    float thisDist = TestMeshRaycast(g_RayOrigin, g_RayDir, obj, g_BestHit.dist);
+    if(thisDist >= 0 && thisDist < g_BestHit.dist) {
+        g_BestHit.dist = thisDist;
+        g_BestHit.frame = frame;
+        return I3DENUMRET_OK;
+    }
+
+    return I3DENUMRET_OK;
+}
+
 void SceneEditor::Update() {
     m_TargetCameraVelocity = {0, 0, 0};
 
@@ -1381,6 +1418,28 @@ void SceneEditor::Update() {
     m_Camera->SetPos(m_CameraPos);
     m_Camera->SetDir(forwardDir, 0);
     m_Camera->Update();
+
+    if(io.MouseClicked[0] && !ImGui::IsAnyItemHovered() && !ImGui::IsWindowHovered() && !ImGuizmo::IsOver()) {
+        LS3D_RESULT res = m_Scene->UnmapScreenPoint(io.MouseClickedPos[0].x, io.MouseClickedPos[0].y, g_RayOrigin, g_RayDir);
+
+        if(res == I3D_OK) {
+            g_BestHit.dist = FLT_MAX;
+            g_BestHit.frame = nullptr;
+            g_BestHit.hitPos = {0, 0, 0};
+
+            m_Scene->EnumFrames(EnumSceneFrames, (uint32_t)this, ENUMF_ALL);
+
+            if(g_BestHit.frame) {
+                I3D_frame* ancestor = FindModelAncestor(g_BestHit.frame);
+
+                if(ancestor != m_PrimarySector) {
+                    SelectFrame(ancestor);
+                } else {
+                    SelectFrame(g_BestHit.frame);
+                }
+            }
+        }
+    }
 
     m_IGraph->Clear(0xFF000000, 1.0, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER);
     if(m_SceneLoaded) {
@@ -1654,7 +1713,7 @@ void SceneEditor::Update() {
                 if(dist <= 64) {
                     S_matrix worldMat = mesh.linkedFrame->GetWorldMat();
 
-                    for (CollisionMesh::Triangle& tri : mesh.tris) {
+                    for(CollisionMesh::Triangle& tri: mesh.tris) {
                         S_vector w0 = tri.positions[0] * worldMat;
                         S_vector w1 = tri.positions[1] * worldMat;
                         S_vector w2 = tri.positions[2] * worldMat;
@@ -2483,7 +2542,11 @@ void SceneEditor::Update() {
                 } else {
                     ImGui::InputText("Name", m_SelectedFrameName, 256);
                 }
-                ImGui::Text("Type: %s", g_pSzFrameNames[m_SelectedFrame->GetType()]);
+                ImGui::Text("Type: %s", GetFrameTypeName(m_SelectedFrame->GetType()));
+                if(m_SelectedFrame->GetType() == FRAME_VISUAL) {
+                    I3D_visual* visual = (I3D_visual*)m_SelectedFrame;
+                    ImGui::Text("Visual type: %s", GetVisualTypeName(visual->GetVisualType()));
+                }
 
                 ImGui::Separator();
 
@@ -4200,7 +4263,6 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
 
     reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
 
-    
     CollisionMesh* curMesh = nullptr;
 
     struct CollisionTriangle : public CollisionVolume {
@@ -4224,10 +4286,10 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
             t.vertices[j].linkedFrame = m_ColManager.links[linkIndex].frame;
 
             S_vertex_3d* vertices = nullptr;
-            if(t.vertices[j].linkedFrame->GetType() == FRAME_VISUAL) { 
+            if(t.vertices[j].linkedFrame->GetType() == FRAME_VISUAL) {
                 I3D_visual* visual = (I3D_visual*)t.vertices[j].linkedFrame;
 
-                if (visual->GetVisualType() == VISUAL_OBJECT || visual->GetVisualType() == VISUAL_LIT_OBJECT) {
+                if(visual->GetVisualType() == VISUAL_OBJECT || visual->GetVisualType() == VISUAL_LIT_OBJECT) {
                     I3D_object* obj = (I3D_object*)visual;
 
                     I3D_mesh_object* mesh = obj->GetMesh();
@@ -4240,10 +4302,10 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
                 }
             }
         }
-        
+
         t.plane.normal = reader.ReadVec3();
         t.plane.distance = reader.ReadSingle();
-        
+
         if(!IsMeshColliderPresent(t.vertices[0].linkedFrame)) {
             HierarchyEntry* entry = FindEntryByFrame(t.vertices[0].linkedFrame);
 
@@ -4263,12 +4325,11 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
             }
 
             entry->collisions.push_back(&collider);
-        }
-        else {
+        } else {
             CollisionMesh* collider = GetMeshCollider(t.vertices[0].linkedFrame);
 
             CollisionMesh::Triangle& tri = collider->tris.emplace_back();
-            for (int j = 0; j < 3; j++) {
+            for(int j = 0; j < 3; j++) {
                 tri.indices[j] = t.vertices[j].vertexBufferIndex;
                 tri.positions[j] = t.vertices[j].vertexPos;
                 tri.plane = t.plane;
@@ -5310,7 +5371,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
         writer.WriteInt32(0);
 
         for(CollisionMesh& m: m_ColManager.meshes) {
-            for (CollisionMesh::Triangle& tri : m.tris) {
+            for(CollisionMesh::Triangle& tri: m.tris) {
                 m.WriteData(&writer);
                 for(int j = 0; j < 3; j++) {
                     writer.WriteUInt16(tri.indices[j]);
@@ -5324,7 +5385,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
                 writer.WriteVec3(tri.plane.normal);
                 writer.WriteSingle(tri.plane.distance);
-            }            
+            }
         }
 
         for(CollisionAABB& a: m_ColManager.aabbs) {

@@ -186,6 +186,9 @@ class SceneEditor {
 
     ScriptEditor* GetScriptEditor() { return &m_ScriptEditor; }
 
+    I3D_scene* GetScene() const { return m_Scene; }
+    I3D_camera* GetCamera() const { return m_Camera; }
+
     void ShowLightmapDialog() { m_ShowLightmapDialog = true; }
 
     bool ToggleWebView() {
@@ -356,6 +359,14 @@ class SceneEditor {
     void Clear();
 
   private:
+    inline I3D_frame* FindModelAncestor(I3D_frame* frame) {
+        while(frame != m_PrimarySector) {
+            if(frame->GetType() == FRAME_MODEL) { return frame; }
+            frame = frame->GetParent();
+        }
+        return frame; // Fallback: original (null/root)
+    }
+
     struct CityPart {
         std::string name;
         I3D_frame* frame;
@@ -451,7 +462,7 @@ class SceneEditor {
     }
 
     bool IsMeshColliderPresent(I3D_frame* frame) const {
-        for (const CollisionMesh& collider : m_ColManager.meshes) {
+        for(const CollisionMesh& collider: m_ColManager.meshes) {
             if(collider.linkedFrame == frame) return true;
         }
 
@@ -496,11 +507,7 @@ class SceneEditor {
     };
 
     struct CollisionLink {
-        enum LinkType {
-            LINK_NONE,
-            LINK_SURFACE,
-            LINK_VOLUME
-        } type;
+        enum LinkType { LINK_NONE, LINK_SURFACE, LINK_VOLUME } type;
         I3D_frame* frame;
     };
 

@@ -121,22 +121,27 @@ class I3D_frame {
     char _pad4[42];
 };
 
-static const char* g_pSzFrameNames[] = {"NULL",
-                                        "VISUAL",
-                                        "LIGHT",
-                                        "CAMERA",
-                                        "SOUND",
-                                        "SECTOR",
-                                        "DUMMY",
-                                        "TARGET",
-                                        "USER",
-                                        "MODEL",
-                                        "JOINT",
-                                        "VOLUME",
-                                        "OCCLUDER",
-                                        "SCENE",
-                                        "AREA",
-                                        "SHADOW",
-                                        "LANDSACPE",
-                                        "EMITOR",
-                                        "LAST"};
+static const char* GetFrameTypeName(I3D_FRAME_TYPE type) {
+    switch(type) {
+    case FRAME_NULL: return "Null";
+    case FRAME_VISUAL: return "Visual";
+    case FRAME_LIGHT: return "Light";
+    case FRAME_CAMERA: return "Camera";
+    case FRAME_SOUND: return "Sound";
+    case FRAME_SECTOR: return "Sector";
+    case FRAME_DUMMY: return "Dummy";
+    case FRAME_TARGET: return "Target";
+    case FRAME_USER: return "User";
+    case FRAME_MODEL: return "Model";
+    case FRAME_JOINT: return "Joint";
+    case FRAME_VOLUME: return "Volume";
+    case FRAME_OCCLUDER: return "Occluder";
+    case FRAME_SCENE: return "Scene";
+    case FRAME_AREA: return "Area";
+    case FRAME_SHADOW: return "Shadow";
+    case FRAME_LANDSACPE: return "Landscape";
+    case FRAME_EMITOR: return "Emitter";
+    case FRAME_LAST: return "Last";
+    default: return "Unknown";
+    }
+}
