@@ -1324,7 +1324,11 @@ I3DENUMRET __stdcall EnumSceneFrames(I3D_frame* frame, uint32_t user) {
     if(!editor->GetScene()->TestVisibility(frame, editor->GetCamera())) { return I3DENUMRET_OK; }
 
     I3D_visual* visual = (I3D_visual*)frame;
-    if(visual->GetVisualType() != VISUAL_OBJECT && visual->GetVisualType() != VISUAL_LIT_OBJECT) { return I3DENUMRET_OK; }
+    if(visual->GetVisualType() != VISUAL_OBJECT && visual->GetVisualType() != VISUAL_LIT_OBJECT && visual->GetVisualType() != VISUAL_SINGLE_MESH &&
+       visual->GetVisualType() != VISUAL_SINGLE_MORPH && visual->GetVisualType() != VISUAL_MORPH && visual->GetVisualType() != VISUAL_BILLBOARD &&
+       visual->GetVisualType() != VISUAL_MIRROR) {
+        return I3DENUMRET_OK;
+    }
 
     const auto& worldBVol = frame->m_sWorldBVol;
     float tHit;
