@@ -33,7 +33,7 @@ class I3D_scene : public I3D_frame {
     virtual float __stdcall GetLightness(S_vector const&, I3D_sector*, uint32_t, I3D_frame* const);
     virtual void __stdcall SetActiveCamera(I3D_camera* pCamera);
     virtual LS3D_RESULT __stdcall UnmapScreenPoint(int32_t iX, int32_t iY, S_vector& vPos, S_vector& vDir);
-    virtual LS3D_RESULT __stdcall TransformPoints(S_vector const*, S_vector4*, uint32_t);
+    virtual LS3D_RESULT __stdcall TransformPoints(S_vector const* pos, S_vector4* outPos, uint32_t numSteps);
     virtual bool __stdcall TestVisibility(I3D_frame* pFrame, I3D_camera* pCamera);
     virtual LS3D_RESULT __stdcall SetAnimation(I3D_animation_set*, uint32_t, float, I3D_ANIMOPTIONS);
     virtual I3D_animation_set* __stdcall GetAnimationSet(uint32_t uIndex);

@@ -355,7 +355,7 @@ static float TestMeshRaycast(S_vector rayOrigin, S_vector rayDir, I3D_object* ob
 
     float closestT = maxDist;
 
-    for (int vNum = 0; vNum < lod->m_uNumVertices; vNum += 3) {
+    for (uint32_t vNum = 0; vNum < lod->m_uNumVertices; vNum += 3) {
         S_vector v0 = verts[vNum].pos * worldMat;
         S_vector v1 = verts[vNum + 1].pos * worldMat;
         S_vector v2 = verts[vNum + 2].pos * worldMat;
@@ -366,4 +366,30 @@ static float TestMeshRaycast(S_vector rayOrigin, S_vector rayDir, I3D_object* ob
 
     lod->UnlockVertices();
     return closestT < maxDist ? closestT : -1.0f;
+}
+
+struct ScreenPos {
+    ImVec2 pos;
+    float depth = 0.0f;
+    bool valid = false;
+};
+
+static bool ProjectWorldToScreen(I3D_scene* scene, const S_vector& worldPos, ScreenPos& out) {
+    S_vector4 clipSpace;
+    LS3D_RESULT res = scene->TransformPoints(&worldPos, &clipSpace, 1);
+    if(res != I3D_OK) return false;
+
+    if(clipSpace.w <= 0.0f) return false;
+
+    float ndcX = clipSpace.x / clipSpace.w;
+    float ndcY = clipSpace.y / clipSpace.w;
+    out.depth = clipSpace.z / clipSpace.w;
+
+    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    out.pos.x = (ndcX * 0.5f + 0.5f) * displaySize.x;
+    out.pos.y = (1.0f - (ndcY * 0.5f + 0.5f)) * displaySize.y;
+
+    out.valid = (ndcX >= -1.01f && ndcX <= 1.01f && ndcY >= -1.01f && ndcY <= 1.01f && out.depth <= 1.0f && out.depth >= -0.01f);
+
+    return out.valid;
 }

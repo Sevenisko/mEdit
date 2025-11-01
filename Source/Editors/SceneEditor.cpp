@@ -45,7 +45,12 @@ static WNDPROC g_OriginalChildWndProc = NULL;
 
 static bool g_ChangesMade = false;
 
-S_vector g_ColliderColor(0.57f, 0.96f, 0.55f);
+S_vector g_AABBColor(0.57f, 0.96f, 0.55f);
+S_vector g_OBBColor(0.12f, 0.92f, 0.08f);
+S_vector g_XTOBBColor(0.08f, 0.59f, 0.05f);
+S_vector g_SphereColor(0.78f, 0.93f, 0.25f);
+S_vector g_CylinderColor(0.60f, 0.75f, 0.07f);
+S_vector g_FaceColor(0.25f, 0.93f, 0.84f);
 
 std::string OpenFileDialog(FileDialog::Mode mode, const std::string& title, const std::vector<FileDialog::Filter>& filters) {
     FileDialog dialog(mode, title, filters);
@@ -1090,7 +1095,7 @@ void SceneEditor::DrawBatchedLines(const std::vector<LineVertex>& vertices, cons
     m_D3DDevice->SetRenderState(D3DRS_ALPHAREF, TRUE);
     m_D3DDevice->SetRenderState(D3DRS_LIGHTING, FALSE);
     m_D3DDevice->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
-    m_D3DDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
+    //m_D3DDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
     m_D3DDevice->SetTexture(0, nullptr);
     m_D3DDevice->SetStreamSource(0, pVB, sizeof(LineVertex));
     m_D3DDevice->SetVertexShader(LINE_FVF);
@@ -1311,11 +1316,18 @@ float g_FramerateUpdateTime = 0;
 struct PickHit {
     I3D_frame* frame = nullptr;
     float dist = FLT_MAX;
-    S_vector hitPos = {0, 0, 0};
+};
+
+struct BVHit {
+    I3D_frame* frame = nullptr;
+    float estDist;
+    bool operator<(const BVHit& rhs) const { return estDist < rhs.estDist; }
 };
 
 PickHit g_BestHit;
 S_vector g_RayOrigin{0, 0, 0}, g_RayDir{0, 0, 0};
+std::vector<BVHit> g_HitCandidates;
+#define MAX_PICK 50000.0f
 
 I3DENUMRET __stdcall EnumSceneFrames(I3D_frame* frame, uint32_t user) {
     SceneEditor* editor = (SceneEditor*)user;
@@ -1330,19 +1342,17 @@ I3DENUMRET __stdcall EnumSceneFrames(I3D_frame* frame, uint32_t user) {
         return I3DENUMRET_OK;
     }
 
-    const auto& worldBVol = frame->m_sWorldBVol;
-    float tHit;
-    if((tHit = RayAABB_HitDist(g_RayOrigin, g_RayDir, worldBVol.bbox.min, worldBVol.bbox.max, g_BestHit.dist)) < 0) { return I3DENUMRET_OK; }
-
     I3D_object* obj = (I3D_object*)visual;
     I3D_mesh_object* mesh = obj->GetMesh();
 
     if(!mesh) { return I3DENUMRET_OK; }
 
-    float thisDist = TestMeshRaycast(g_RayOrigin, g_RayDir, obj, g_BestHit.dist);
-    if(thisDist >= 0 && thisDist < g_BestHit.dist) {
-        g_BestHit.dist = thisDist;
-        g_BestHit.frame = frame;
+    const auto& worldBVol = frame->m_sWorldBVol;
+    float tHit;
+    if((tHit = RayAABB_HitDist(g_RayOrigin, g_RayDir, worldBVol.bbox.min, worldBVol.bbox.max, MAX_PICK)) < 0) { return I3DENUMRET_OK; }
+
+    if(tHit >= 0) {
+        g_HitCandidates.push_back({frame, tHit});
         return I3DENUMRET_OK;
     }
 
@@ -1423,15 +1433,28 @@ void SceneEditor::Update() {
     m_Camera->SetDir(forwardDir, 0);
     m_Camera->Update();
 
-    if(io.MouseClicked[0] && !ImGui::IsAnyItemHovered() && !ImGui::IsWindowHovered() && !ImGuizmo::IsOver()) {
+    if(io.MouseClicked[0] && !ImGui::IsAnyItemHovered() && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) && !ImGuizmo::IsOver()) {
         LS3D_RESULT res = m_Scene->UnmapScreenPoint(io.MouseClickedPos[0].x, io.MouseClickedPos[0].y, g_RayOrigin, g_RayDir);
 
         if(res == I3D_OK) {
             g_BestHit.dist = FLT_MAX;
             g_BestHit.frame = nullptr;
-            g_BestHit.hitPos = {0, 0, 0};
+
+            g_HitCandidates.clear();
 
             m_Scene->EnumFrames(EnumSceneFrames, (uint32_t)this, ENUMF_ALL);
+
+            if(!g_HitCandidates.empty()) {
+                std::sort(g_HitCandidates.begin(), g_HitCandidates.end());
+
+                for(size_t i = 0; i < g_HitCandidates.size() && g_HitCandidates[i].estDist < g_BestHit.dist; ++i) {
+                    float precise = TestMeshRaycast(g_RayOrigin, g_RayDir, (I3D_object*)g_HitCandidates[i].frame, g_BestHit.dist);
+                    if(precise >= 0) {
+                        g_BestHit.dist = precise;
+                        g_BestHit.frame = g_HitCandidates[i].frame;
+                    }
+                }
+            }
 
             if(g_BestHit.frame) {
                 I3D_frame* ancestor = FindModelAncestor(g_BestHit.frame);
@@ -1441,6 +1464,8 @@ void SceneEditor::Update() {
                 } else {
                     SelectFrame(g_BestHit.frame);
                 }
+            } else {
+                ClearSelection();
             }
         }
     }
@@ -1448,11 +1473,6 @@ void SceneEditor::Update() {
     m_IGraph->Clear(0xFF000000, 1.0, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER);
     if(m_SceneLoaded) {
         m_Scene->Render();
-        if(m_SelectedFrame) {
-            m_IGraph->SetWorldMatrix(m_SelectedFrame->m_mWorldMat);
-            //m_3DDriver->DrawBox(m_SelectedFrame->m_sLocalBVol.bbox, {0, 0, 0}, {1, 0, 0}, 180);
-            DrawWireframeBox(m_SelectedFrame->m_sLocalBVol.bbox, {1, 0, 0}, 0);
-        }
 
         m_IGraph->SetState(ZENABLE, 1);
 
@@ -1641,112 +1661,6 @@ void SceneEditor::Update() {
             }
         }
 
-        if(m_DrawCollisions) {
-            for(CollisionAABB& aabb: m_ColManager.aabbs) {
-                S_vector pos = (aabb.min + aabb.max) * 0.5f;
-
-                float dist = (m_CameraPos - pos).Magnitude();
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    m_IGraph->SetWorldMatrix(mat);
-                    I3D_bbox bbox;
-                    bbox.min = aabb.min;
-                    bbox.max = aabb.max;
-                    DrawWireframeBox(bbox, g_ColliderColor, 0x00);
-                }
-            }
-            for(CollisionXTOBB& xtobb: m_ColManager.xtobbs) {
-                S_vector pos = *(S_vector*)&xtobb.transform.m_41;
-                float dist = (m_CameraPos - pos).Magnitude();
-                if(dist <= 256) {
-                    m_IGraph->SetWorldMatrix(xtobb.transform);
-                    I3D_bbox bbox;
-                    bbox.min = xtobb.minExtent;
-                    bbox.max = xtobb.maxExtent;
-                    DrawWireframeBox(bbox, g_ColliderColor, 0x00);
-                }
-            }
-            for(CollisionOBB& obb: m_ColManager.obbs) {
-                S_vector pos = *(S_vector*)&obb.transform.m_41;
-                float dist = (m_CameraPos - pos).Magnitude();
-
-                if(dist <= 256) {
-                    m_IGraph->SetWorldMatrix(obb.transform);
-                    I3D_bbox bbox;
-                    bbox.min = obb.minExtent;
-                    bbox.max = obb.maxExtent;
-                    DrawWireframeBox(bbox, g_ColliderColor, 0x00);
-                }
-            }
-            for(CollisionSphere& sphere: m_ColManager.spheres) {
-                float dist = (m_CameraPos - sphere.pos).Magnitude();
-
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    I3D_bsphere bsphere;
-                    bsphere.pos = sphere.pos;
-                    bsphere.radius = sphere.radius;
-                    m_3DDriver->DrawSphere(mat, bsphere, g_ColliderColor, 0x00);
-                }
-            }
-            for(CollisionCylinder& cylinder: m_ColManager.cylinders) {
-                S_vector pos = {cylinder.pos.x, 0, cylinder.pos.y};
-                float dist = (m_CameraPos - pos).Magnitude();
-
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    m_IGraph->SetWorldMatrix(mat);
-                    DrawWireframeCylinder(pos, cylinder.radius, 512.0f, g_ColliderColor, 0x00);
-                }
-            }
-
-            std::vector<LineVertex> lineVerts;
-            std::vector<uint16_t> indices;
-            uint16_t vertOffset = 0;
-
-            for(CollisionMesh& mesh: m_ColManager.meshes) {
-                S_vector pos = mesh.linkedFrame->GetWorldPos();
-                float dist = (m_CameraPos - pos).Magnitude();
-
-                if(dist <= 64) {
-                    S_matrix worldMat = mesh.linkedFrame->GetWorldMat();
-
-                    for(CollisionMesh::Triangle& tri: mesh.tris) {
-                        S_vector w0 = tri.positions[0] * worldMat;
-                        S_vector w1 = tri.positions[1] * worldMat;
-                        S_vector w2 = tri.positions[2] * worldMat;
-
-                        lineVerts.push_back({w0.x, w0.y, w0.z, 0});
-                        lineVerts.push_back({w1.x, w1.y, w1.z, 0});
-                        lineVerts.push_back({w2.x, w2.y, w2.z, 0});
-
-                        indices.push_back(vertOffset + 0);
-                        indices.push_back(vertOffset + 1);
-                        indices.push_back(vertOffset + 1);
-                        indices.push_back(vertOffset + 2);
-                        indices.push_back(vertOffset + 2);
-                        indices.push_back(vertOffset + 0);
-
-                        vertOffset += 3;
-                    }
-                }
-            }
-
-            if(!lineVerts.empty()) {
-                S_matrix mat;
-                mat.Identity();
-                m_IGraph->SetWorldMatrix(mat);
-
-                DrawBatchedLines(lineVerts, indices, g_ColliderColor, 0x00);
-            }
-        }
-
         for(auto frame: m_Frames) {
             bool hasDrawnFrameSprite = false;
 
@@ -1807,7 +1721,163 @@ void SceneEditor::Update() {
                 }
             }
         }
+
+        if(m_DrawCollisions) {
+            for(AABBCollider& aabb: m_ColManager.aabbs) {
+                S_vector pos = (aabb.min + aabb.max) * 0.5f;
+
+                float dist = (m_CameraPos - pos).Magnitude();
+                if(dist <= 256) {
+                    S_matrix mat;
+                    mat.Identity();
+
+                    m_IGraph->SetWorldMatrix(mat);
+                    I3D_bbox bbox;
+                    bbox.min = aabb.min;
+                    bbox.max = aabb.max;
+                    DrawWireframeBox(bbox, g_AABBColor, 0x00);
+                }
+            }
+            for(XTOBBCollider& xtobb: m_ColManager.xtobbs) {
+                S_vector pos = *(S_vector*)&xtobb.transform.m_41;
+                float dist = (m_CameraPos - pos).Magnitude();
+                if(dist <= 256) {
+                    m_IGraph->SetWorldMatrix(xtobb.transform);
+                    I3D_bbox bbox;
+                    bbox.min = xtobb.minExtent;
+                    bbox.max = xtobb.maxExtent;
+                    DrawWireframeBox(bbox, g_XTOBBColor, 0x00);
+                }
+            }
+            for(OBBCollider& obb: m_ColManager.obbs) {
+                S_vector pos = *(S_vector*)&obb.transform.m_41;
+                float dist = (m_CameraPos - pos).Magnitude();
+
+                if(dist <= 256) {
+                    m_IGraph->SetWorldMatrix(obb.transform);
+                    I3D_bbox bbox;
+                    bbox.min = obb.minExtent;
+                    bbox.max = obb.maxExtent;
+                    DrawWireframeBox(bbox, g_OBBColor, 0x00);
+                }
+            }
+            for(SphereCollider& sphere: m_ColManager.spheres) {
+                float dist = (m_CameraPos - sphere.pos).Magnitude();
+
+                if(dist <= 256) {
+                    S_matrix mat;
+                    mat.Identity();
+
+                    I3D_bsphere bsphere;
+                    bsphere.pos = sphere.pos;
+                    bsphere.radius = sphere.radius;
+                    m_3DDriver->DrawSphere(mat, bsphere, g_SphereColor, 0x00);
+                }
+            }
+            for(CylinderCollider& cylinder: m_ColManager.cylinders) {
+                S_vector pos = {cylinder.pos.x, 0, cylinder.pos.y};
+                float dist = (m_CameraPos - pos).Magnitude();
+
+                if(dist <= 256) {
+                    S_matrix mat;
+                    mat.Identity();
+
+                    m_IGraph->SetWorldMatrix(mat);
+                    DrawWireframeCylinder(pos, cylinder.radius, 512.0f, g_CylinderColor, 0x00);
+                }
+            }
+
+            /*std::vector<LineVertex> lineVerts;
+            std::vector<uint16_t> indices;
+            uint16_t vertOffset = 0;
+
+            for(MeshCollider& mesh: m_ColManager.meshes) {
+                S_vector pos = mesh.linkedFrame->GetWorldPos();
+                float dist = (m_CameraPos - pos).Magnitude();
+
+                if(dist <= 64) {
+                    S_matrix worldMat = mesh.linkedFrame->GetWorldMat();
+
+                    for(MeshCollider::Triangle& tri: mesh.tris) {
+                        S_vector w0 = tri.positions[0] * worldMat;
+                        S_vector w1 = tri.positions[1] * worldMat;
+                        S_vector w2 = tri.positions[2] * worldMat;
+
+                        lineVerts.push_back({w0.x, w0.y, w0.z, 0});
+                        lineVerts.push_back({w1.x, w1.y, w1.z, 0});
+                        lineVerts.push_back({w2.x, w2.y, w2.z, 0});
+
+                        indices.push_back(vertOffset + 0);
+                        indices.push_back(vertOffset + 1);
+                        indices.push_back(vertOffset + 1);
+                        indices.push_back(vertOffset + 2);
+                        indices.push_back(vertOffset + 2);
+                        indices.push_back(vertOffset + 0);
+
+                        vertOffset += 3;
+                    }
+                }
+            }
+
+            if(!lineVerts.empty()) {
+                S_matrix mat;
+                mat.Identity();
+                m_IGraph->SetWorldMatrix(mat);
+
+                DrawBatchedLines(lineVerts, indices, g_FaceColor, 0x00);
+            }*/
+        }
         m_IGraph->SetState(ZENABLE, 0);
+
+        if(m_SelectedFrame) {
+            m_IGraph->SetState(ZENABLE, 1);
+            m_IGraph->SetWorldMatrix(m_SelectedFrame->m_mWorldMat);
+            //m_3DDriver->DrawBox(m_SelectedFrame->m_sLocalBVol.bbox, {0, 0, 0}, {1, 0, 0}, 180);
+            DrawWireframeBox(m_SelectedFrame->m_sLocalBVol.bbox, {1, 0, 0}, 0);
+            m_IGraph->SetState(ZENABLE, 0);
+
+            std::vector<LineVertex> lineVerts;
+            std::vector<uint16_t> indices;
+            uint16_t vertOffset = 0;
+
+            MeshCollider* mesh = GetMeshCollider(m_SelectedFrame);
+
+            if(mesh) {
+                S_vector pos = m_SelectedFrame->GetWorldPos();
+                float dist = (m_CameraPos - pos).Magnitude();
+
+                if(dist <= 256) {
+                    S_matrix worldMat = m_SelectedFrame->GetWorldMat();
+
+                    for(TriangleCollider* tri: mesh->tris) {
+                        S_vector w0 = tri->vertices[0].vertexPos * worldMat;
+                        S_vector w1 = tri->vertices[1].vertexPos * worldMat;
+                        S_vector w2 = tri->vertices[2].vertexPos * worldMat;
+
+                        lineVerts.push_back({w0.x, w0.y, w0.z, 0});
+                        lineVerts.push_back({w1.x, w1.y, w1.z, 0});
+                        lineVerts.push_back({w2.x, w2.y, w2.z, 0});
+
+                        indices.push_back(vertOffset + 0);
+                        indices.push_back(vertOffset + 1);
+                        indices.push_back(vertOffset + 1);
+                        indices.push_back(vertOffset + 2);
+                        indices.push_back(vertOffset + 2);
+                        indices.push_back(vertOffset + 0);
+
+                        vertOffset += 3;
+                    }
+                }
+
+                if(!lineVerts.empty()) {
+                    S_matrix mat;
+                    mat.Identity();
+                    m_IGraph->SetWorldMatrix(mat);
+
+                    DrawBatchedLines(lineVerts, indices, g_FaceColor, 0x00);
+                }
+            }
+        }
 
         /*for(CityPart& part: m_CacheParts) {
             S_matrix mat;
@@ -2787,7 +2857,7 @@ void SceneEditor::Update() {
                 if(entry && !entry->collisions.empty()) {
                     ImGui::NonCollapsingHeader("Collisions");
                     int index = 0;
-                    for(CollisionVolume* volume: entry->collisions) {
+                    for(Collider* volume: entry->collisions) {
                         char name[64];
                         sprintf(name, "Collision %d", index);
                         if(ImGui::TreeNode(name)) {
@@ -4267,24 +4337,13 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
 
     reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
 
-    CollisionMesh* curMesh = nullptr;
+    size_t i = 0;
 
-    struct CollisionTriangle : public CollisionVolume {
-        struct VertexLink {
-            uint16_t vertexBufferIndex = 0xFFFF;
-            S_vector vertexPos{0, 0, 0};
-            I3D_frame* linkedFrame = nullptr;
-        } vertices[3];
-
-        S_plane plane;
-    };
-
-    for(int i = 0; i < grid.numFaces; i++) {
-        CollisionTriangle t;
-
+    m_ColManager.tris.resize(grid.numFaces);
+    for(TriangleCollider& t: m_ColManager.tris) {
         t.ReadData(&reader);
         // No linkID for triangles
-        for(int j = 0; j < 3; j++) {
+        for(int j = 0; j < 3; ++j) {
             t.vertices[j].vertexBufferIndex = reader.ReadUInt16();
             uint16_t linkIndex = reader.ReadUInt16();
             t.vertices[j].linkedFrame = m_ColManager.links[linkIndex].frame;
@@ -4310,41 +4369,32 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         t.plane.normal = reader.ReadVec3();
         t.plane.distance = reader.ReadSingle();
 
-        if(!IsMeshColliderPresent(t.vertices[0].linkedFrame)) {
-            HierarchyEntry* entry = FindEntryByFrame(t.vertices[0].linkedFrame);
-
-            CollisionMesh& collider = m_ColManager.meshes.emplace_back();
-
+        if (!IsMeshColliderPresent(t.vertices[0].linkedFrame)) {
+            MeshCollider collider;
+            collider.type = t.type;
             collider.sortInfo = t.sortInfo;
             collider.flags = t.flags;
             collider.mtlId = t.mtlId;
-
             collider.linkedFrame = t.vertices[0].linkedFrame;
+            collider.tris.push_back(&t);
 
-            CollisionMesh::Triangle& tri = collider.tris.emplace_back();
-            for(int j = 0; j < 3; j++) {
-                tri.indices[j] = t.vertices[j].vertexBufferIndex;
-                tri.positions[j] = t.vertices[j].vertexPos;
-                tri.plane = t.plane;
-            }
+            HierarchyEntry* entry = FindEntryByFrame(t.vertices[0].linkedFrame);
+            entry->collisions.push_back(&t);
 
-            entry->collisions.push_back(&collider);
+            m_ColManager.meshes.push_back(collider);
+            m_ColManager.colliders.push_back(&collider);
         } else {
-            CollisionMesh* collider = GetMeshCollider(t.vertices[0].linkedFrame);
-
-            CollisionMesh::Triangle& tri = collider->tris.emplace_back();
-            for(int j = 0; j < 3; j++) {
-                tri.indices[j] = t.vertices[j].vertexBufferIndex;
-                tri.positions[j] = t.vertices[j].vertexPos;
-                tri.plane = t.plane;
-            }
+            MeshCollider* collider = GetMeshCollider(t.vertices[0].linkedFrame);
+            collider->tris.push_back(&t);
         }
+
+        i++;
     }
 
-    size_t i = 0;
+    i = 0;
 
     m_ColManager.aabbs.resize(grid.numAABBs);
-    for(CollisionAABB& a: m_ColManager.aabbs) {
+    for(AABBCollider& a: m_ColManager.aabbs) {
         a.ReadData(&reader);
         uint32_t linkId = reader.ReadUInt32();
         a.linkedFrame = m_ColManager.links[linkId].frame;
@@ -4353,14 +4403,14 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         a.min = reader.ReadVec3();
         a.max = reader.ReadVec3();
 
-        m_ColManager.volumes.push_back(&a);
+        m_ColManager.colliders.push_back(&a);
         i++;
     }
 
     i = 0;
 
     m_ColManager.xtobbs.resize(grid.numXTOBBs);
-    for(CollisionXTOBB& xt: m_ColManager.xtobbs) {
+    for(XTOBBCollider& xt: m_ColManager.xtobbs) {
         xt.ReadData(&reader);
         uint32_t linkId = reader.ReadUInt32();
         xt.linkedFrame = m_ColManager.links[linkId].frame;
@@ -4373,14 +4423,14 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         xt.transform = reader.ReadMatrix();
         xt.inverseTransform = reader.ReadMatrix();
 
-        m_ColManager.volumes.push_back(&xt);
+        m_ColManager.colliders.push_back(&xt);
         i++;
     }
 
     i = 0;
 
     m_ColManager.cylinders.resize(grid.numCylinders);
-    for(CollisionCylinder& c: m_ColManager.cylinders) {
+    for(CylinderCollider& c: m_ColManager.cylinders) {
         c.ReadData(&reader);
         uint32_t linkId = reader.ReadUInt32();
         c.linkedFrame = m_ColManager.links[linkId].frame;
@@ -4389,14 +4439,14 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         c.pos = reader.ReadVec2();
         c.radius = reader.ReadSingle();
 
-        m_ColManager.volumes.push_back(&c);
+        m_ColManager.colliders.push_back(&c);
         i++;
     }
 
     i = 0;
 
     m_ColManager.obbs.resize(grid.numOBBs);
-    for(CollisionOBB& o: m_ColManager.obbs) {
+    for(OBBCollider& o: m_ColManager.obbs) {
         o.ReadData(&reader);
         uint32_t linkId = reader.ReadUInt32();
         o.linkedFrame = m_ColManager.links[linkId].frame;
@@ -4407,14 +4457,14 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         o.transform = reader.ReadMatrix();
         o.inverseTransform = reader.ReadMatrix();
 
-        m_ColManager.volumes.push_back(&o);
+        m_ColManager.colliders.push_back(&o);
         i++;
     }
 
     i = 0;
 
     m_ColManager.spheres.resize(grid.numSpheres);
-    for(CollisionSphere& s: m_ColManager.spheres) {
+    for(SphereCollider& s: m_ColManager.spheres) {
         s.ReadData(&reader);
         uint32_t linkId = reader.ReadUInt32();
         s.linkedFrame = m_ColManager.links[linkId].frame;
@@ -4423,22 +4473,22 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         s.pos = reader.ReadVec3();
         s.radius = reader.ReadSingle();
 
-        m_ColManager.volumes.push_back(&s);
+        m_ColManager.colliders.push_back(&s);
         i++;
     }
 
-    reader.Seek(sizeof(int32_t), SEEK_CUR);
+    reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
 
-    uint32_t numCells = grid.length * grid.width;
+    uint32_t numCells = grid.length * grid.width; // No height for VERSION_MAFIA
     m_ColManager.cells.resize(numCells);
-    for(CollisionCell& cell: m_ColManager.cells) {
+    for(GridCell& cell: m_ColManager.cells) {
         cell.numVolumes = reader.ReadUInt32();
         cell.reserved = reader.ReadInt32();
         cell.height = reader.ReadSingle();
-        cell.width = reader.ReadSingle();
+        cell.width = reader.ReadSingle(); // Additional unknown for VERSION_MAFIA
         if(cell.numVolumes) {
             cell.references.resize(cell.numVolumes);
-            for(CollisionCell::Reference& ref: cell.references) {
+            for(GridCell::Reference& ref: cell.references) {
                 int32_t packed = reader.ReadInt32();
                 ref.volumeBufferOffset = packed & 0x00FFFFFF;
                 ref.volumeType = (packed >> 24) & 0xFF;
@@ -4449,17 +4499,6 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
             if(padding != 0) { reader.Seek(4 - padding, SEEK_CUR); }
         }
     }
-
-    // Store loaded data into class members as appropriate
-    // e.g., m_CollisionLinks = links;
-    // m_CollisionGrid = grid;
-    // m_CollisionFaces = faces;
-    // m_CollisionAABBs = aabbs;
-    // m_CollisionXTOBBs = xtobbs;
-    // m_CollisionCylinders = cylinders;
-    // m_CollisionOBBs = obbs;
-    // m_CollisionSpheres = spheres;
-    // m_CollisionCells = cells;
 
     return true;
 }
@@ -5218,52 +5257,47 @@ void SceneEditor::WriteCheckBin(const std::string& fileName) {
 }
 
 void SceneEditor::WriteTreeKlz(const std::string& fileName) {
-    if(m_ColManager.volumes.empty()) return;
+    if(m_ColManager.colliders.empty()) return;
 
     BinaryWriter writer(fileName);
     if(writer.IsOpen()) {
+        // Write the file header
         writer.WriteFixedString("GifC", 4);
         writer.WriteUInt32(5);
 
-        size_t gridOffsetPlaceholder = writer.GetCurPos();
-        writer.WriteUInt32(0);
-
-        uint32_t numLinks = m_ColManager.links.size();
-        writer.WriteUInt32(numLinks);
-
+        size_t headerPlaceholder = writer.GetCurPos();
+        writer.WriteUInt32(0); // Bogus gridDataOffset
+        writer.WriteUInt32(0); // Bpgus numLinks
         writer.WriteUInt32(m_ColManager.unk1);
         writer.WriteUInt32(m_ColManager.unk2);
 
-        size_t offsetsPlaceholder = writer.GetCurPos();
-        for(uint32_t i = 0; i < numLinks; ++i) {
-            writer.WriteUInt32(0);
-        }
-
+        // Collect the frame links
         std::vector<I3D_frame*> linkFrames;
-
-        m_ColManager.links.clear();
-
-        for(CollisionVolume* volume: m_ColManager.volumes) {
+        for(Collider* volume: m_ColManager.colliders) {
             switch(volume->type) {
-            case CollisionVolume::VOLUME_FACE0:
-            case CollisionVolume::VOLUME_FACE1:
-            case CollisionVolume::VOLUME_FACE2:
-            case CollisionVolume::VOLUME_FACE3:
-            case CollisionVolume::VOLUME_FACE4:
-            case CollisionVolume::VOLUME_FACE5:
-            case CollisionVolume::VOLUME_FACE6:
-            case CollisionVolume::VOLUME_FACE7: {
-                CollisionMesh* collider = (CollisionMesh*)volume;
+            case Collider::VOLUME_FACE0:
+            case Collider::VOLUME_FACE1:
+            case Collider::VOLUME_FACE2:
+            case Collider::VOLUME_FACE3:
+            case Collider::VOLUME_FACE4:
+            case Collider::VOLUME_FACE5:
+            case Collider::VOLUME_FACE6:
+            case Collider::VOLUME_FACE7: {
+                MeshCollider* mesh = (MeshCollider*)volume;
 
-                I3D_frame* frame = collider->linkedFrame;
+                for(TriangleCollider* tri: mesh->tris) {
+                    for(int i = 0; i < 3; i++) {
+                        I3D_frame* frame = tri->vertices[i].linkedFrame;
 
-                if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
-                    linkFrames.push_back(frame);
-                    m_ColManager.links.push_back({CollisionLink::LINK_SURFACE, frame});
+                        if(std::find(linkFrames.begin(), linkFrames.end(), frame) == linkFrames.end()) {
+                            linkFrames.push_back(frame);
+                            m_ColManager.links.push_back({CollisionLink::LINK_SURFACE, frame});
+                        }
+                    }
                 }
             } break;
-            case CollisionVolume::VOLUME_AABB: {
-                CollisionAABB* aabb = (CollisionAABB*)volume;
+            case Collider::VOLUME_AABB: {
+                AABBCollider* aabb = (AABBCollider*)volume;
 
                 I3D_frame* frame = aabb->linkedFrame;
 
@@ -5272,8 +5306,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
-            case CollisionVolume::VOLUME_XTOBB: {
-                CollisionXTOBB* xtobb = (CollisionXTOBB*)volume;
+            case Collider::VOLUME_XTOBB: {
+                XTOBBCollider* xtobb = (XTOBBCollider*)volume;
 
                 I3D_frame* frame = xtobb->linkedFrame;
 
@@ -5282,8 +5316,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
-            case CollisionVolume::VOLUME_CYLINDER: {
-                CollisionCylinder* cylinder = (CollisionCylinder*)volume;
+            case Collider::VOLUME_CYLINDER: {
+                CylinderCollider* cylinder = (CylinderCollider*)volume;
 
                 I3D_frame* frame = cylinder->linkedFrame;
 
@@ -5292,8 +5326,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
-            case CollisionVolume::VOLUME_OBB: {
-                CollisionOBB* obb = (CollisionOBB*)volume;
+            case Collider::VOLUME_OBB: {
+                OBBCollider* obb = (OBBCollider*)volume;
 
                 I3D_frame* frame = obb->linkedFrame;
 
@@ -5302,8 +5336,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     m_ColManager.links.push_back({CollisionLink::LINK_VOLUME, frame});
                 }
             } break;
-            case CollisionVolume::VOLUME_SPHERE: {
-                CollisionSphere* sphere = (CollisionSphere*)volume;
+            case Collider::VOLUME_SPHERE: {
+                SphereCollider* sphere = (SphereCollider*)volume;
 
                 I3D_frame* frame = sphere->linkedFrame;
 
@@ -5315,8 +5349,15 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             }
         }
 
-        std::vector<uint32_t> actualLinkOffsets(numLinks);
-        for(size_t i = 0; i < numLinks; ++i) {
+        // Write bogus offsets to frame links
+        uint32_t offsetsPlaceholder = static_cast<uint32_t>(writer.GetCurPos());
+        for(size_t i = 0; i < m_ColManager.links.size(); ++i) {
+            writer.WriteUInt32(0);
+        }
+
+        // Write frame links
+        std::vector<uint32_t> actualLinkOffsets(m_ColManager.links.size());
+        for(size_t i = 0; i < m_ColManager.links.size(); ++i) {
             actualLinkOffsets[i] = static_cast<uint32_t>(writer.GetCurPos());
             writer.WriteUInt32(m_ColManager.links[i].type);
             std::string name = m_ColManager.links[i].frame->GetName();
@@ -5328,18 +5369,21 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             }
         }
 
-        uint32_t gridDataOffset = static_cast<uint32_t>(writer.GetCurPos());
-
+        // Write actual offsets to frame links
         writer.Seek(offsetsPlaceholder, SEEK_SET);
-        for(uint32_t offset: actualLinkOffsets) {
-            writer.WriteUInt32(offset);
+        for(size_t i = 0; i < m_ColManager.links.size(); ++i) {
+            writer.WriteUInt32(actualLinkOffsets[i]);
         }
-
-        writer.Seek(gridOffsetPlaceholder, SEEK_SET);
-        writer.WriteUInt32(gridDataOffset);
-
         writer.Seek(0, SEEK_END);
 
+        // Write actual gridDataOffset and numLinks to the header
+        uint32_t gridDataOffset = static_cast<uint32_t>(writer.GetCurPos());
+        writer.Seek(headerPlaceholder, SEEK_SET);
+        writer.WriteUInt32(gridDataOffset);
+        writer.WriteUInt32(m_ColManager.links.size());
+        writer.Seek(0, SEEK_END);
+
+        // Write the grid
         writer.WriteVec2(m_ColManager.grid.min);
         writer.WriteVec2(m_ColManager.grid.max);
         writer.WriteVec2(m_ColManager.grid.cellSize);
@@ -5349,20 +5393,20 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
         writer.WriteVec3(m_ColManager.grid.unk2);
 
         writer.WriteUInt32(m_ColManager.grid.numFaces);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(0); // Probably an reserved pointer
         writer.WriteUInt32(m_ColManager.grid.numXTOBBs);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(0); // Probably an reserved pointer
         writer.WriteUInt32(m_ColManager.grid.numAABBs);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(0); // Probably an reserved pointer
         writer.WriteUInt32(m_ColManager.grid.numSpheres);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(0); // Probably an reserved pointer
         writer.WriteUInt32(m_ColManager.grid.numOBBs);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(0); // Probably an reserved pointer
         writer.WriteUInt32(m_ColManager.grid.numCylinders);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(0); // Probably an reserved pointer
 
         for(int i = 0; i < 2; ++i) {
-            writer.WriteInt32(0);
+            writer.WriteInt32(0); // 2 integers to fill up the space
         }
 
         for(float val: m_ColManager.grid.bounds.x) {
@@ -5372,35 +5416,41 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteSingle(val);
         }
 
-        writer.WriteInt32(0);
+        writer.WriteInt32(0); // Bogus integer to fill up the space
 
-        for(CollisionMesh& m: m_ColManager.meshes) {
-            for(CollisionMesh::Triangle& tri: m.tris) {
-                m.WriteData(&writer);
-                for(int j = 0; j < 3; j++) {
-                    writer.WriteUInt16(tri.indices[j]);
-                    for(size_t index = 0; index < m_ColManager.links.size(); index++) {
-                        if(m_ColManager.links[index].frame == m.linkedFrame) {
-                            writer.WriteUInt16(static_cast<uint16_t>(index));
-                            break;
-                        }
+        // Write face collisions
+        for(const TriangleCollider& t: m_ColManager.tris) {
+            writer.WriteUInt8(static_cast<uint8_t>(t.type));
+            writer.WriteUInt8(t.sortInfo);
+            writer.WriteUInt8(t.flags);
+            writer.WriteUInt8(t.mtlId);
+            for(int j = 0; j < 3; ++j) {
+                writer.WriteUInt16(t.vertices[j].vertexBufferIndex);
+                for(size_t index = 0; index < m_ColManager.links.size(); index++) {
+                    if(m_ColManager.links[index].frame == t.vertices[j].linkedFrame) {
+                        writer.WriteUInt16(static_cast<uint16_t>(index));
+                        break;
                     }
                 }
-
-                writer.WriteVec3(tri.plane.normal);
-                writer.WriteSingle(tri.plane.distance);
             }
+            writer.WriteVec3(t.plane.normal);
+            writer.WriteSingle(t.plane.distance);
         }
 
-        for(CollisionAABB& a: m_ColManager.aabbs) {
-            a.WriteData(&writer);
+        // Write AABB collisions
+        for(const AABBCollider& a: m_ColManager.aabbs) {
+            writer.WriteUInt8(static_cast<uint8_t>(a.type));
+            writer.WriteUInt8(a.sortInfo);
+            writer.WriteUInt8(a.flags);
+            writer.WriteUInt8(a.mtlId);
             uint32_t linkId = std::distance(linkFrames.begin(), std::find(linkFrames.begin(), linkFrames.end(), a.linkedFrame));
             writer.WriteUInt32(linkId);
             writer.WriteVec3(a.min);
             writer.WriteVec3(a.max);
         }
 
-        for(const CollisionXTOBB& xt: m_ColManager.xtobbs) {
+        // Write XTOBB collisions
+        for(const XTOBBCollider& xt: m_ColManager.xtobbs) {
             writer.WriteUInt8(static_cast<uint8_t>(xt.type));
             writer.WriteUInt8(xt.sortInfo);
             writer.WriteUInt8(xt.flags);
@@ -5415,7 +5465,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteMatrix(xt.inverseTransform);
         }
 
-        for(const CollisionCylinder& c: m_ColManager.cylinders) {
+        // Write cylinder collisions
+        for(const CylinderCollider& c: m_ColManager.cylinders) {
             writer.WriteUInt8(static_cast<uint8_t>(c.type));
             writer.WriteUInt8(c.sortInfo);
             writer.WriteUInt8(c.flags);
@@ -5426,7 +5477,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteSingle(c.radius);
         }
 
-        for(const CollisionOBB& o: m_ColManager.obbs) {
+        // Write OBB collisions
+        for(const OBBCollider& o: m_ColManager.obbs) {
             writer.WriteUInt8(static_cast<uint8_t>(o.type));
             writer.WriteUInt8(o.sortInfo);
             writer.WriteUInt8(o.flags);
@@ -5439,7 +5491,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteMatrix(o.inverseTransform);
         }
 
-        for(const CollisionSphere& s: m_ColManager.spheres) {
+        // Write sphere collisions
+        for(const SphereCollider& s: m_ColManager.spheres) {
             writer.WriteUInt8(static_cast<uint8_t>(s.type));
             writer.WriteUInt8(s.sortInfo);
             writer.WriteUInt8(s.flags);
@@ -5450,16 +5503,16 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteSingle(s.radius);
         }
 
-        writer.WriteInt32(0); // Skipped 1 int32
+        writer.WriteInt32(0); // Bogus integer to fill up the space
 
-        // Write cells
-        for(const CollisionCell& cell: m_ColManager.cells) {
+        // Write grid cells
+        for(const GridCell& cell: m_ColManager.cells) {
             writer.WriteUInt32(cell.numVolumes);
             writer.WriteInt32(cell.reserved);
             writer.WriteSingle(cell.height);
             writer.WriteSingle(cell.width);
             if(cell.numVolumes) {
-                for(const CollisionCell::Reference& ref: cell.references) {
+                for(const GridCell::Reference& ref: cell.references) {
                     int32_t packed = (ref.volumeType << 24) | (ref.volumeBufferOffset & 0x00FFFFFF);
                     writer.WriteInt32(packed);
                 }

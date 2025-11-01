@@ -77,6 +77,14 @@ enum MenuCommand {
     MCMD_CREATE_WAYPOINT = 460,
     MCMD_CREATE_CROSSPOINT,
 
+    // Create -> Collision menu
+    MCMD_CREATE_AABB = 470,
+    MCMD_CREATE_OBB,
+    MCMD_CREATE_XTOBB,
+    MCMD_CREATE_SPHERE,
+    MCMD_CREATE_CYLINDER,
+    MCMD_CREATE_MESH,
+
     // Create menu
     MCMD_CREATE_WEBNODE = 480,
     MCMD_CREATE_SCRIPT,
@@ -384,7 +392,7 @@ class SceneEditor {
         std::vector<I3D_model*> models{};
     };
 
-    struct CollisionVolume {
+    struct Collider {
         enum VolumeType : uint8_t {
             VOLUME_FACE0 = 0,
             VOLUME_FACE1 = 1,
@@ -401,6 +409,11 @@ class SceneEditor {
             VOLUME_OBB = 0x83,
             VOLUME_CYLINDER = 0x84
         } type;
+
+        bool IsMeshCollider() const {
+            return type == VOLUME_FACE0 || type == VOLUME_FACE1 || type == VOLUME_FACE2 || type == VOLUME_FACE3 || type == VOLUME_FACE4 ||
+                   type == VOLUME_FACE5 || type == VOLUME_FACE6 || type == VOLUME_FACE7;
+        }
 
         std::string GetTypeAsString() {
             switch(type) {
@@ -419,7 +432,7 @@ class SceneEditor {
             case VOLUME_CYLINDER: return "Cylinder";
             }
 
-            return "";
+            return "Unknown";
         }
 
         uint8_t sortInfo;
@@ -428,7 +441,7 @@ class SceneEditor {
         I3D_frame* linkedFrame = nullptr;
 
         void ReadData(BinaryReader* reader) {
-            type = static_cast<CollisionVolume::VolumeType>(reader->ReadUInt8());
+            type = static_cast<Collider::VolumeType>(reader->ReadUInt8());
             sortInfo = reader->ReadUInt8();
             flags = reader->ReadUInt8();
             mtlId = reader->ReadUInt8();
@@ -441,20 +454,24 @@ class SceneEditor {
         }
     };
 
-    struct CollisionMesh : public CollisionVolume {
-        struct Triangle {
-            uint16_t indices[3];
-            S_vector positions[3];
+    struct TriangleCollider : public Collider {
+        struct VertexLink {
+            uint16_t vertexBufferIndex = 0xFFFF;
+            S_vector vertexPos{0, 0, 0};
+            I3D_frame* linkedFrame = nullptr;
+        } vertices[3];
 
-            S_plane plane;
-        };
+        S_vector CalculateCentroid() { return (vertices[0].vertexPos + vertices[1].vertexPos + vertices[2].vertexPos) * (1.0f / 3.0f); }
 
-        std::vector<Triangle> tris;
-        I3D_frame* linkedFrame = nullptr;
+        S_plane plane;
     };
 
-    CollisionMesh* GetMeshCollider(I3D_frame* frame) {
-        for(CollisionMesh& collider: m_ColManager.meshes) {
+    struct MeshCollider : public Collider {
+        std::vector<TriangleCollider*> tris;
+    };
+
+    MeshCollider* GetMeshCollider(I3D_frame* frame) {
+        for(MeshCollider& collider: m_ColManager.meshes) {
             if(collider.linkedFrame == frame) return &collider;
         }
 
@@ -462,14 +479,14 @@ class SceneEditor {
     }
 
     bool IsMeshColliderPresent(I3D_frame* frame) const {
-        for(const CollisionMesh& collider: m_ColManager.meshes) {
+        for(const MeshCollider& collider: m_ColManager.meshes) {
             if(collider.linkedFrame == frame) return true;
         }
 
         return false;
     }
 
-    /*struct CollisionTriangle : public CollisionVolume {
+    /*struct TriangleCollider : public Collider {
         struct VertexLink {
             uint16_t vertexBufferIndex = 0xFFFF;
             S_vector vertexPos{0, 0, 0};
@@ -481,27 +498,27 @@ class SceneEditor {
         S_plane plane;
     };*/
 
-    struct CollisionXTOBB : public CollisionVolume {
+    struct XTOBBCollider : public Collider {
         S_vector min, max, minExtent, maxExtent;
         S_matrix transform, inverseTransform;
     };
 
-    struct CollisionAABB : public CollisionVolume {
+    struct AABBCollider : public Collider {
         S_vector min, max;
     };
 
-    struct CollisionSphere : public CollisionVolume {
+    struct SphereCollider : public Collider {
         S_vector pos;
         float radius;
     };
 
-    struct CollisionOBB : public CollisionVolume {
+    struct OBBCollider : public Collider {
         S_vector minExtent, maxExtent;
 
         S_matrix transform, inverseTransform;
     };
 
-    struct CollisionCylinder : public CollisionVolume {
+    struct CylinderCollider : public Collider {
         S_vector2 pos;
         float radius;
     };
@@ -511,7 +528,7 @@ class SceneEditor {
         I3D_frame* frame;
     };
 
-    struct CollisionCell {
+    struct GridCell {
         uint32_t numVolumes;
         int reserved;
         float height;
@@ -545,16 +562,8 @@ class SceneEditor {
         } bounds;
     };
 
-    struct CollisionHeader {
-        uint32_t version;
-        uint32_t gridDataOffset;
-        uint32_t numLinks;
-    };
-
     struct CollisionManager {
         void Clear() {
-            ZeroMemory(&header, sizeof(CollisionHeader));
-
             unk1 = unk2 = 0;
 
             links.clear();
@@ -563,7 +572,7 @@ class SceneEditor {
             grid.bounds.y.clear();
             ZeroMemory(&grid, sizeof(CollisionGrid) - sizeof(CollisionGrid::Bounds));
 
-            meshes.clear();
+            tris.clear();
             aabbs.clear();
             xtobbs.clear();
             cylinders.clear();
@@ -573,22 +582,22 @@ class SceneEditor {
             cells.clear();
         }
 
-        CollisionHeader header;
         std::vector<CollisionLink> links;
         CollisionGrid grid;
 
         uint32_t unk1, unk2;
 
-        std::vector<CollisionVolume*> volumes;
+        std::list<Collider*> colliders;
+        std::list<MeshCollider> meshes;
 
-        std::vector<CollisionMesh> meshes;
-        std::vector<CollisionAABB> aabbs;
-        std::vector<CollisionXTOBB> xtobbs;
-        std::vector<CollisionCylinder> cylinders;
-        std::vector<CollisionOBB> obbs;
-        std::vector<CollisionSphere> spheres;
+        std::list<TriangleCollider> tris;
+        std::list<AABBCollider> aabbs;
+        std::list<XTOBBCollider> xtobbs;
+        std::list<CylinderCollider> cylinders;
+        std::list<OBBCollider> obbs;
+        std::list<SphereCollider> spheres;
 
-        std::vector<CollisionCell> cells;
+        std::vector<GridCell> cells;
     };
 
     struct HierarchyEntry {
@@ -596,7 +605,7 @@ class SceneEditor {
         I3D_frame* frame = nullptr;
         Actor* actor = nullptr;
         HierarchyEntry* parent = nullptr;
-        std::vector<CollisionVolume*> collisions;
+        std::vector<Collider*> collisions;
         std::vector<HierarchyEntry> children;
     };
 
