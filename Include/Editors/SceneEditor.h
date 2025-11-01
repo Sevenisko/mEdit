@@ -605,7 +605,7 @@ class SceneEditor {
         I3D_frame* frame = nullptr;
         Actor* actor = nullptr;
         HierarchyEntry* parent = nullptr;
-        std::vector<Collider*> collisions;
+        std::vector<Collider*> colliders;
         std::vector<HierarchyEntry> children;
     };
 

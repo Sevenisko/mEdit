@@ -2854,14 +2854,14 @@ void SceneEditor::Update() {
                 }
 
                 HierarchyEntry* entry = FindEntryByFrame(m_SelectedFrame);
-                if(entry && !entry->collisions.empty()) {
+                if(entry && !entry->colliders.empty()) {
                     ImGui::NonCollapsingHeader("Collisions");
                     int index = 0;
-                    for(Collider* volume: entry->collisions) {
+                    for(Collider* collider: entry->colliders) {
                         char name[64];
                         sprintf(name, "Collision %d", index);
                         if(ImGui::TreeNode(name)) {
-                            ImGui::Text("Type: %s", volume->GetTypeAsString().c_str());
+                            ImGui::Text("Type: %s", collider->GetTypeAsString().c_str());
                             ImGui::TreePop();
                         }
                         index++;
@@ -4379,7 +4379,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
             collider.tris.push_back(&t);
 
             HierarchyEntry* entry = FindEntryByFrame(t.vertices[0].linkedFrame);
-            entry->collisions.push_back(&t);
+            entry->colliders.push_back(&t);
 
             m_ColManager.meshes.push_back(collider);
             m_ColManager.colliders.push_back(&collider);
@@ -4399,7 +4399,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         uint32_t linkId = reader.ReadUInt32();
         a.linkedFrame = m_ColManager.links[linkId].frame;
         HierarchyEntry* entry = FindEntryByFrame(a.linkedFrame);
-        entry->collisions.push_back(&a);
+        entry->colliders.push_back(&a);
         a.min = reader.ReadVec3();
         a.max = reader.ReadVec3();
 
@@ -4415,7 +4415,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         uint32_t linkId = reader.ReadUInt32();
         xt.linkedFrame = m_ColManager.links[linkId].frame;
         HierarchyEntry* entry = FindEntryByFrame(xt.linkedFrame);
-        entry->collisions.push_back(&xt);
+        entry->colliders.push_back(&xt);
         xt.min = reader.ReadVec3();
         xt.max = reader.ReadVec3();
         xt.minExtent = reader.ReadVec3();
@@ -4435,7 +4435,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         uint32_t linkId = reader.ReadUInt32();
         c.linkedFrame = m_ColManager.links[linkId].frame;
         HierarchyEntry* entry = FindEntryByFrame(c.linkedFrame);
-        entry->collisions.push_back(&c);
+        entry->colliders.push_back(&c);
         c.pos = reader.ReadVec2();
         c.radius = reader.ReadSingle();
 
@@ -4451,7 +4451,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         uint32_t linkId = reader.ReadUInt32();
         o.linkedFrame = m_ColManager.links[linkId].frame;
         HierarchyEntry* entry = FindEntryByFrame(o.linkedFrame);
-        entry->collisions.push_back(&o);
+        entry->colliders.push_back(&o);
         o.minExtent = reader.ReadVec3();
         o.maxExtent = reader.ReadVec3();
         o.transform = reader.ReadMatrix();
@@ -4469,7 +4469,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         uint32_t linkId = reader.ReadUInt32();
         s.linkedFrame = m_ColManager.links[linkId].frame;
         HierarchyEntry* entry = FindEntryByFrame(s.linkedFrame);
-        entry->collisions.push_back(&s);
+        entry->colliders.push_back(&s);
         s.pos = reader.ReadVec3();
         s.radius = reader.ReadSingle();
 
@@ -5273,8 +5273,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
         // Collect the frame links
         std::vector<I3D_frame*> linkFrames;
-        for(Collider* volume: m_ColManager.colliders) {
-            switch(volume->type) {
+        for(Collider* collider: m_ColManager.colliders) {
+            switch(collider->type) {
             case Collider::VOLUME_FACE0:
             case Collider::VOLUME_FACE1:
             case Collider::VOLUME_FACE2:
@@ -5283,7 +5283,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             case Collider::VOLUME_FACE5:
             case Collider::VOLUME_FACE6:
             case Collider::VOLUME_FACE7: {
-                MeshCollider* mesh = (MeshCollider*)volume;
+                MeshCollider* mesh = (MeshCollider*)collider;
 
                 for(TriangleCollider* tri: mesh->tris) {
                     for(int i = 0; i < 3; i++) {
@@ -5297,7 +5297,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                 }
             } break;
             case Collider::VOLUME_AABB: {
-                AABBCollider* aabb = (AABBCollider*)volume;
+                AABBCollider* aabb = (AABBCollider*)collider;
 
                 I3D_frame* frame = aabb->linkedFrame;
 
@@ -5307,7 +5307,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                 }
             } break;
             case Collider::VOLUME_XTOBB: {
-                XTOBBCollider* xtobb = (XTOBBCollider*)volume;
+                XTOBBCollider* xtobb = (XTOBBCollider*)collider;
 
                 I3D_frame* frame = xtobb->linkedFrame;
 
@@ -5317,7 +5317,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                 }
             } break;
             case Collider::VOLUME_CYLINDER: {
-                CylinderCollider* cylinder = (CylinderCollider*)volume;
+                CylinderCollider* cylinder = (CylinderCollider*)collider;
 
                 I3D_frame* frame = cylinder->linkedFrame;
 
@@ -5327,7 +5327,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                 }
             } break;
             case Collider::VOLUME_OBB: {
-                OBBCollider* obb = (OBBCollider*)volume;
+                OBBCollider* obb = (OBBCollider*)collider;
 
                 I3D_frame* frame = obb->linkedFrame;
 
@@ -5337,7 +5337,7 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                 }
             } break;
             case Collider::VOLUME_SPHERE: {
-                SphereCollider* sphere = (SphereCollider*)volume;
+                SphereCollider* sphere = (SphereCollider*)collider;
 
                 I3D_frame* frame = sphere->linkedFrame;
 
