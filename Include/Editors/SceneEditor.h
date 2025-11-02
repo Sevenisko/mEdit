@@ -31,6 +31,8 @@
 #include <Editors/ScriptEditor.h>
 #include <set>
 
+#include <Config.h>
+
 #include <Utils/MathUtils.h>
 
 class I3D_lit_object;
@@ -47,6 +49,7 @@ enum MenuCommand {
     // View menu
     MCMD_VIEW_WEBNODES = 200,
     MCMD_VIEW_ROADPOINTS,
+    MCMD_VIEW_CITYPARTS,
     MCMD_VIEW_COLLISIONS,
 
     // Edit menu
@@ -88,10 +91,14 @@ enum MenuCommand {
     // Create menu
     MCMD_CREATE_WEBNODE = 480,
     MCMD_CREATE_SCRIPT,
-    MCMD_CREATE_LIGHTMAP,
+
+    // Window menu
+    MCMD_WINDOW_SCENESETTINGS = 500,
+    MCMD_WINDOW_COLLISIONSETTINGS,
+    MCMD_WINDOW_LMG,
 
     // Help menu
-    MCMD_HELP_ABOUT = 500
+    MCMD_HELP_ABOUT = 600
 };
 
 class SceneEditor {
@@ -188,6 +195,9 @@ class SceneEditor {
 
     bool IsOpened() const { return !m_MissionPath.empty(); }
 
+    bool IsShowingSceneSettings() const { return m_ShowingSceneSettings; }
+    bool IsShowingCollisionSettings() const { return m_ShowingCollisionSettings; }
+
     bool IsShowingLightmapDialog() const { return m_ShowLightmapDialog; }
 
     std::string GetMissionPath() const { return m_MissionPath; }
@@ -197,6 +207,8 @@ class SceneEditor {
     I3D_scene* GetScene() const { return m_Scene; }
     I3D_camera* GetCamera() const { return m_Camera; }
 
+    void ShowSceneSettings() { m_ShowingSceneSettings = true; }
+    void ShowCollisionSettings() { m_ShowingCollisionSettings = true; }
     void ShowLightmapDialog() { m_ShowLightmapDialog = true; }
 
     bool ToggleWebView() {
@@ -227,6 +239,16 @@ class SceneEditor {
         CheckMenuItem(m_ViewMenu, MCMD_VIEW_COLLISIONS, MF_BYCOMMAND | state);
 
         return m_DrawCollisions;
+    }
+
+    bool ToggleCityPartsView() {
+        m_DrawCityParts = !m_DrawCityParts;
+
+        UINT state = m_DrawCityParts ? MF_CHECKED : MF_UNCHECKED;
+
+        CheckMenuItem(m_ViewMenu, MCMD_VIEW_CITYPARTS, MF_BYCOMMAND | state);
+
+        return m_DrawCityParts;
     }
 
     HWND GetWindowHandle() const { return m_IGraph->GetMainHWND(); }
@@ -379,8 +401,8 @@ class SceneEditor {
         std::string name;
         I3D_frame* frame;
         I3D_bbox bbox;
-        S_vector2 pos;
-        float radius;
+        S_vector2 spherePos;
+        float sphereRadius;
         S_vector2 leftBottomCorner;
         S_vector2 leftSide;
         S_vector2 rightBottomCorner;
@@ -446,7 +468,7 @@ class SceneEditor {
             flags = reader->ReadUInt8();
             mtlId = reader->ReadUInt8();
         }
-        void WriteData(BinaryWriter* writer) {
+        void WriteData(BinaryWriter* writer) const {
             writer->WriteUInt8(static_cast<uint8_t>(type));
             writer->WriteUInt8(sortInfo);
             writer->WriteUInt8(flags);
@@ -486,18 +508,6 @@ class SceneEditor {
         return false;
     }
 
-    /*struct TriangleCollider : public Collider {
-        struct VertexLink {
-            uint16_t vertexBufferIndex = 0xFFFF;
-            S_vector vertexPos{0, 0, 0};
-            I3D_frame* linkedFrame = nullptr;
-        } vertices[3];
-
-        S_vector CalculateCentroid() { return (vertices[0].vertexPos + vertices[1].vertexPos + vertices[2].vertexPos) * (1.0f / 3.0f); }
-
-        S_plane plane;
-    };*/
-
     struct XTOBBCollider : public Collider {
         S_vector min, max, minExtent, maxExtent;
         S_matrix transform, inverseTransform;
@@ -530,7 +540,6 @@ class SceneEditor {
 
     struct GridCell {
         uint32_t numVolumes;
-        int reserved;
         float height;
         float width;
 
@@ -543,34 +552,30 @@ class SceneEditor {
     };
 
     struct CollisionGrid {
-        S_vector2 min;
-        S_vector2 max;
-        S_vector2 cellSize;
-        uint32_t width;
-        uint32_t length;
-        float unk;
-        S_vector unk2;
-        uint32_t numFaces;
-        uint32_t numXTOBBs;
-        uint32_t numAABBs;
-        uint32_t numSpheres;
-        uint32_t numOBBs;
-        uint32_t numCylinders;
+        S_vector2 min{0, 0};
+        S_vector2 max{0, 0};
+        S_vector2 cellSize{5, 5};
+        uint32_t width = 0;
+        uint32_t length = 0;
         struct Bounds {
             std::vector<float> x;
             std::vector<float> y;
         } bounds;
     };
 
+    struct ColliderInfo {
+        size_t offset;
+        uint8_t type;
+    };
+
     struct CollisionManager {
         void Clear() {
-            unk1 = unk2 = 0;
-
             links.clear();
 
             grid.bounds.x.clear();
             grid.bounds.y.clear();
             ZeroMemory(&grid, sizeof(CollisionGrid) - sizeof(CollisionGrid::Bounds));
+            grid.cellSize = {5, 5};
 
             tris.clear();
             aabbs.clear();
@@ -582,10 +587,187 @@ class SceneEditor {
             cells.clear();
         }
 
+        void GenerateGrid() {
+            auto UpdateBounds = [&](const S_vector2& pos) {
+                grid.min.x = min(grid.min.x, pos.x);
+                grid.min.y = min(grid.min.y, pos.y);
+                grid.max.y = max(grid.max.y, pos.y);
+                grid.max.y = max(grid.max.y, pos.y);
+            };
+
+            for(const MeshCollider& collider: meshes) {
+                S_matrix worldMat = collider.linkedFrame->GetWorldMat();
+
+                for(const TriangleCollider* tri: collider.tris) {
+                    for(int i = 0; i < 3; i++) {
+                        const S_vector pos = tri->vertices[i].vertexPos * worldMat;
+                        UpdateBounds({pos.x, pos.z});
+                    }
+                }
+            }
+
+            for(const AABBCollider& collider: aabbs) {
+                UpdateBounds({collider.min.x, collider.min.z});
+                UpdateBounds({collider.max.x, collider.max.z});
+            }
+
+            for(const XTOBBCollider& collider: xtobbs) {
+                UpdateBounds({collider.min.x, collider.min.z});
+                UpdateBounds({collider.max.x, collider.max.z});
+            }
+
+            for(const CylinderCollider& collider: cylinders) {
+                UpdateBounds({collider.pos.x - collider.radius, collider.pos.y - collider.radius});
+                UpdateBounds({collider.pos.x + collider.radius, collider.pos.y + collider.radius});
+            }
+
+            for(const OBBCollider& collider: obbs) {
+                S_vector minPos = collider.minExtent * collider.transform;
+                S_vector maxPos = collider.maxExtent * collider.transform;
+
+                UpdateBounds({minPos.x, minPos.z});
+                UpdateBounds({maxPos.x, maxPos.z});
+            }
+
+            for(const SphereCollider& collider: spheres) {
+                UpdateBounds({collider.pos.x - collider.radius, collider.pos.z - collider.radius});
+                UpdateBounds({collider.pos.x + collider.radius, collider.pos.z + collider.radius});
+            }
+
+            uint32_t gridWidth = static_cast<uint32_t>(std::ceil((grid.max.x - grid.min.x) / grid.cellSize.x));
+            uint32_t gridLength = static_cast<uint32_t>(std::ceil((grid.max.y - grid.min.y) / grid.cellSize.y));
+
+            grid.bounds.x.resize(gridWidth + 1);
+            grid.bounds.y.resize(gridLength + 1);
+            for(uint32_t i = 0; i <= gridWidth; i++)
+                grid.bounds.x[i] = grid.min.x + i * grid.cellSize.x;
+            for(uint32_t i = 0; i <= gridLength; i++)
+                grid.bounds.y[i] = grid.min.y + i * grid.cellSize.y;
+        }
+
+        void GenerateCells(const std::vector<ColliderInfo>& volumeInfos) {
+            struct CellBuilder {
+                std::vector<GridCell::Reference> refs;
+                std::vector<uint8_t> flags;
+            };
+            std::vector<CellBuilder> cellBuilders(grid.width * grid.length);
+
+            auto WorldToCell = [&](float x, float y) -> std::pair<int32_t, int32_t> {
+                int32_t cx = static_cast<int32_t>((x - grid.min.x) / grid.cellSize.x);
+                int32_t cy = static_cast<int32_t>((y - grid.min.y) / grid.cellSize.y);
+                cx = std::clamp(cx, 0, static_cast<int32_t>(grid.width - 1));
+                cy = std::clamp(cy, 0, static_cast<int32_t>(grid.length - 1));
+                return {cx, cy};
+            };
+
+            // ---- assign faces ------------------------------------------------------
+            size_t volIdx = 0;
+            for(size_t i = 0; i < tris.size(); ++i, ++volIdx) {
+                auto it = tris.begin();
+
+                std::advance(it, i);
+
+                const TriangleCollider& t = *it;
+                // approximate triangle AABB
+                float tminX = FLT_MAX, tmaxX = -FLT_MAX, tminY = FLT_MAX, tmaxY = -FLT_MAX;
+                for(int j = 0; j < 3; ++j) {
+                    const S_vector& p = t.vertices[j].vertexPos;
+                    tminX = min(tminX, p.x);
+                    tmaxX = max(tmaxX, p.x);
+                    tminY = min(tminY, p.y);
+                    tmaxY = max(tmaxY, p.y);
+                }
+                auto [c0x, c0y] = WorldToCell(tminX, tminY);
+                auto [c1x, c1y] = WorldToCell(tmaxX, tmaxY);
+                for(int32_t cx = c0x; cx <= c1x; ++cx)
+                    for(int32_t cy = c0y; cy <= c1y; ++cy) {
+                        size_t cellIdx = static_cast<size_t>(cy) * grid.width + cx;
+                        CellBuilder& cb = cellBuilders[cellIdx];
+                        GridCell::Reference ref;
+                        ref.volumeBufferOffset = static_cast<uint32_t>(volumeInfos[volIdx].offset);
+                        ref.volumeType = volumeInfos[volIdx].type;
+                        cb.refs.push_back(ref);
+                        cb.flags.push_back(t.flags); // per-face flag
+                    }
+            }
+
+            // ---- primitive volumes -------------------------------------------------
+            auto AddPrimitive = [&](const auto& vol, uint8_t type) {
+                // simple AABB test (good enough for all primitive types)
+                float vminX = FLT_MAX, vmaxX = -FLT_MAX, vminY = FLT_MAX, vmaxY = -FLT_MAX;
+                // the lambda is instantiated for every primitive type -> we only need XY
+                if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, AABBCollider>) {
+                    vminX = vol.min.x;
+                    vmaxX = vol.max.x;
+                    vminY = vol.min.y;
+                    vmaxY = vol.max.y;
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, XTOBBCollider>) {
+                    vminX = vol.min.x;
+                    vmaxX = vol.max.x;
+                    vminY = vol.min.y;
+                    vmaxY = vol.max.y;
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, CylinderCollider>) {
+                    vminX = vol.pos.x - vol.radius;
+                    vmaxX = vol.pos.x + vol.radius;
+                    vminY = vol.pos.y - vol.radius;
+                    vmaxY = vol.pos.y + vol.radius;
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, OBBCollider>) {
+                    vminX = min(vol.minExtent.x, vol.maxExtent.x);
+                    vmaxX = max(vol.minExtent.x, vol.maxExtent.x);
+                    vminY = min(vol.minExtent.y, vol.maxExtent.y);
+                    vmaxY = max(vol.minExtent.y, vol.maxExtent.y);
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, SphereCollider>) {
+                    vminX = vol.pos.x - vol.radius;
+                    vmaxX = vol.pos.x + vol.radius;
+                    vminY = vol.pos.y - vol.radius;
+                    vmaxY = vol.pos.y + vol.radius;
+                }
+                auto [c0x, c0y] = WorldToCell(vminX, vminY);
+                auto [c1x, c1y] = WorldToCell(vmaxX, vmaxY);
+                for(int32_t cx = c0x; cx <= c1x; ++cx)
+                    for(int32_t cy = c0y; cy <= c1y; ++cy) {
+                        size_t cellIdx = static_cast<size_t>(cy) * grid.width + cx;
+                        CellBuilder& cb = cellBuilders[cellIdx];
+                        GridCell::Reference ref;
+                        ref.volumeBufferOffset = static_cast<uint32_t>(volumeInfos[volIdx].offset);
+                        ref.volumeType = volumeInfos[volIdx].type;
+                        cb.refs.push_back(ref);
+                        cb.flags.push_back(vol.flags);
+                    }
+                ++volIdx;
+            };
+
+            // AABBs
+            for(const AABBCollider& a: aabbs)
+                AddPrimitive(a, Collider::VOLUME_AABB);
+            // XTOBBs
+            for(const XTOBBCollider& xt: xtobbs)
+                AddPrimitive(xt, Collider::VOLUME_XTOBB);
+            // Cylinders
+            for(const CylinderCollider& c: cylinders)
+                AddPrimitive(c, Collider::VOLUME_CYLINDER);
+            // OBBs
+            for(const OBBCollider& o: obbs)
+                AddPrimitive(o, Collider::VOLUME_OBB);
+            // Spheres
+            for(const SphereCollider& s: spheres)
+                AddPrimitive(s, Collider::VOLUME_SPHERE);
+
+            cells.clear();
+            cells.reserve(cellBuilders.size());
+            for(const CellBuilder& cb: cellBuilders) {
+                GridCell gc;
+                gc.numVolumes = static_cast<uint32_t>(cb.refs.size());
+                gc.height = 1.225675e-32f;
+                gc.width = 1.225374e-32f;
+                gc.references = cb.refs;
+                gc.flags = cb.flags;
+                cells.push_back(gc);
+            }
+        }
+
         std::vector<CollisionLink> links;
         CollisionGrid grid;
-
-        uint32_t unk1, unk2;
 
         std::list<Collider*> colliders;
         std::list<MeshCollider> meshes;
@@ -1028,6 +1210,7 @@ class SceneEditor {
     HMENU m_CreateFrameMenu = nullptr;
     HMENU m_CreateActorMenu = nullptr;
     HMENU m_CreateRoadMenu = nullptr;
+    HMENU m_WindowMenu = nullptr;
     HMENU m_HelpMenu = nullptr;
 
     SelectionType m_SelectionType = SEL_NONE;
@@ -1050,6 +1233,8 @@ class SceneEditor {
     std::map<uint16_t, WebNode> m_WebNodes{};
 
     std::string m_MissionPath = "";
+
+    std::string m_MissionFileSignature = " - Mafia mission file - written using " PROJECT_NAME " v" PROJECT_VER " -";
 
     S_vector m_CameraPos = {0, 0, 0};
     S_vector m_CurCameraVelocity = {0, 0, 0};
@@ -1095,11 +1280,15 @@ class SceneEditor {
     bool m_MouseEnabled = false;
 
     bool m_SceneLoaded = false;
+
     bool m_OpenFileDialog = false;
+    bool m_ShowingSceneSettings = false;
+    bool m_ShowingCollisionSettings = false;
 
     bool m_DrawWebNodes = false;
     bool m_DrawRoadPoints = false;
     bool m_DrawCollisions = false;
+    bool m_DrawCityParts = false;
 
     bool m_DrawPopupMessage = false;
     float m_PopupMessageTime = 0;
