@@ -40,7 +40,7 @@ Here are the following features within mEdit:
 
 ## Building the project
 
-In order to build the project, you must have Visual Studio with C++ components installed (2022 is recommended) and CMake (is usually bundled with VS).
+In order to build the project, you must have Visual Studio with C++ components installed (2026 is recommended) and CMake (is usually bundled with VS).
 
 There are two ways to build the project:    
 
