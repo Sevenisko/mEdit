@@ -493,16 +493,16 @@ class SceneEditor {
     };
 
     MeshCollider* GetMeshCollider(I3D_frame* frame) {
-        for(MeshCollider& collider: m_ColManager.meshes) {
-            if(collider.linkedFrame == frame) return &collider;
+        for(MeshCollider* collider: m_ColManager.meshes) {
+            if(collider->linkedFrame == frame) return collider;
         }
 
         return nullptr;
     }
 
     bool IsMeshColliderPresent(I3D_frame* frame) const {
-        for(const MeshCollider& collider: m_ColManager.meshes) {
-            if(collider.linkedFrame == frame) return true;
+        for(const MeshCollider* collider: m_ColManager.meshes) {
+            if(collider->linkedFrame == frame) return true;
         }
 
         return false;
@@ -549,6 +549,8 @@ class SceneEditor {
         };
         std::vector<Reference> references;
         std::vector<uint8_t> flags;
+
+        std::vector<TriangleCollider*> sortedColliders;
     };
 
     struct CollisionGrid {
@@ -570,6 +572,8 @@ class SceneEditor {
 
     struct CollisionManager {
         void Clear() {
+            colliders.clear();
+
             links.clear();
 
             grid.bounds.x.clear();
@@ -577,12 +581,40 @@ class SceneEditor {
             ZeroMemory(&grid, sizeof(CollisionGrid) - sizeof(CollisionGrid::Bounds));
             grid.cellSize = {5, 5};
 
+            for(TriangleCollider* collider: tris) {
+                delete collider;
+            }
             tris.clear();
+
+            for(AABBCollider* collider: aabbs) {
+                delete collider;
+            }
             aabbs.clear();
+
+            for(XTOBBCollider* collider: xtobbs) {
+                delete collider;
+            }
             xtobbs.clear();
+
+            for(CylinderCollider* collider: cylinders) {
+                delete collider;
+            }
             cylinders.clear();
+
+            for(OBBCollider* collider: obbs) {
+                delete collider;
+            }
             obbs.clear();
+
+            for(SphereCollider* collider: spheres) {
+                delete collider;
+            }
             spheres.clear();
+
+            for(MeshCollider* collider: meshes) {
+                delete collider;
+            }
+            meshes.clear();
 
             cells.clear();
         }
@@ -595,10 +627,10 @@ class SceneEditor {
                 grid.max.y = max(grid.max.y, pos.y);
             };
 
-            for(const MeshCollider& collider: meshes) {
-                S_matrix worldMat = collider.linkedFrame->GetWorldMat();
+            for(const MeshCollider* collider: meshes) {
+                S_matrix worldMat = collider->linkedFrame->GetWorldMat();
 
-                for(const TriangleCollider* tri: collider.tris) {
+                for(const TriangleCollider* tri: collider->tris) {
                     for(int i = 0; i < 3; i++) {
                         const S_vector pos = tri->vertices[i].vertexPos * worldMat;
                         UpdateBounds({pos.x, pos.z});
@@ -606,32 +638,32 @@ class SceneEditor {
                 }
             }
 
-            for(const AABBCollider& collider: aabbs) {
-                UpdateBounds({collider.min.x, collider.min.z});
-                UpdateBounds({collider.max.x, collider.max.z});
+            for(const AABBCollider* collider: aabbs) {
+                UpdateBounds({collider->min.x, collider->min.z});
+                UpdateBounds({collider->max.x, collider->max.z});
             }
 
-            for(const XTOBBCollider& collider: xtobbs) {
-                UpdateBounds({collider.min.x, collider.min.z});
-                UpdateBounds({collider.max.x, collider.max.z});
+            for(const XTOBBCollider* collider: xtobbs) {
+                UpdateBounds({collider->min.x, collider->min.z});
+                UpdateBounds({collider->max.x, collider->max.z});
             }
 
-            for(const CylinderCollider& collider: cylinders) {
-                UpdateBounds({collider.pos.x - collider.radius, collider.pos.y - collider.radius});
-                UpdateBounds({collider.pos.x + collider.radius, collider.pos.y + collider.radius});
+            for(const CylinderCollider* collider: cylinders) {
+                UpdateBounds({collider->pos.x - collider->radius, collider->pos.y - collider->radius});
+                UpdateBounds({collider->pos.x + collider->radius, collider->pos.y + collider->radius});
             }
 
-            for(const OBBCollider& collider: obbs) {
-                S_vector minPos = collider.minExtent * collider.transform;
-                S_vector maxPos = collider.maxExtent * collider.transform;
+            for(const OBBCollider* collider: obbs) {
+                S_vector minPos = collider->minExtent * collider->transform;
+                S_vector maxPos = collider->maxExtent * collider->transform;
 
                 UpdateBounds({minPos.x, minPos.z});
                 UpdateBounds({maxPos.x, maxPos.z});
             }
 
-            for(const SphereCollider& collider: spheres) {
-                UpdateBounds({collider.pos.x - collider.radius, collider.pos.z - collider.radius});
-                UpdateBounds({collider.pos.x + collider.radius, collider.pos.z + collider.radius});
+            for(const SphereCollider* collider: spheres) {
+                UpdateBounds({collider->pos.x - collider->radius, collider->pos.z - collider->radius});
+                UpdateBounds({collider->pos.x + collider->radius, collider->pos.z + collider->radius});
             }
 
             uint32_t gridWidth = static_cast<uint32_t>(std::ceil((grid.max.x - grid.min.x) / grid.cellSize.x));
@@ -644,6 +676,9 @@ class SceneEditor {
             for(uint32_t i = 0; i <= gridLength; i++)
                 grid.bounds.y[i] = grid.min.y + i * grid.cellSize.y;
         }
+
+        #undef min
+        #undef max
 
         void GenerateCells(const std::vector<ColliderInfo>& volumeInfos) {
             struct CellBuilder {
@@ -662,122 +697,175 @@ class SceneEditor {
 
             // ---- assign faces ------------------------------------------------------
             size_t volIdx = 0;
-            for(size_t i = 0; i < tris.size(); ++i, ++volIdx) {
-                auto it = tris.begin();
-
-                std::advance(it, i);
-
-                const TriangleCollider& t = *it;
-                // approximate triangle AABB
+            size_t triIdx = 0;
+            for(auto it = tris.begin(); it != tris.end(); ++it, ++triIdx, ++volIdx) {
+                const TriangleCollider* t = *it;
+                // approximate triangle AABB in WORLD space
                 float tminX = FLT_MAX, tmaxX = -FLT_MAX, tminY = FLT_MAX, tmaxY = -FLT_MAX;
                 for(int j = 0; j < 3; ++j) {
-                    const S_vector& p = t.vertices[j].vertexPos;
-                    tminX = min(tminX, p.x);
-                    tmaxX = max(tmaxX, p.x);
-                    tminY = min(tminY, p.y);
-                    tmaxY = max(tmaxY, p.y);
+                    const S_vector& p = t->vertices[j].vertexPos * t->vertices[j].linkedFrame->GetWorldMat();
+                    tminX = std::min(tminX, p.x);
+                    tmaxX = std::max(tmaxX, p.x);
+                    tminY = std::min(tminY, p.y);
+                    tmaxY = std::max(tmaxY, p.y);
                 }
+                if(tminX > tmaxX || tminY > tmaxY) continue; // Degenerate, skip
+
                 auto [c0x, c0y] = WorldToCell(tminX, tminY);
                 auto [c1x, c1y] = WorldToCell(tmaxX, tmaxY);
                 for(int32_t cx = c0x; cx <= c1x; ++cx)
                     for(int32_t cy = c0y; cy <= c1y; ++cy) {
                         size_t cellIdx = static_cast<size_t>(cy) * grid.width + cx;
                         CellBuilder& cb = cellBuilders[cellIdx];
-                        GridCell::Reference ref;
-                        ref.volumeBufferOffset = static_cast<uint32_t>(volumeInfos[volIdx].offset);
-                        ref.volumeType = volumeInfos[volIdx].type;
-                        cb.refs.push_back(ref);
-                        cb.flags.push_back(t.flags); // per-face flag
+                        cb.refs.push_back({static_cast<int32_t>(volumeInfos[volIdx].offset), volumeInfos[volIdx].type});
+                        cb.flags.push_back(t->flags);
                     }
             }
 
             // ---- primitive volumes -------------------------------------------------
-            auto AddPrimitive = [&](const auto& vol, uint8_t type) {
-                // simple AABB test (good enough for all primitive types)
+            auto AddPrimitive = [&](const auto* vol, uint8_t type) {
                 float vminX = FLT_MAX, vmaxX = -FLT_MAX, vminY = FLT_MAX, vmaxY = -FLT_MAX;
-                // the lambda is instantiated for every primitive type -> we only need XY
-                if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, AABBCollider>) {
-                    vminX = vol.min.x;
-                    vmaxX = vol.max.x;
-                    vminY = vol.min.y;
-                    vmaxY = vol.max.y;
-                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, XTOBBCollider>) {
-                    vminX = vol.min.x;
-                    vmaxX = vol.max.x;
-                    vminY = vol.min.y;
-                    vmaxY = vol.max.y;
-                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, CylinderCollider>) {
-                    vminX = vol.pos.x - vol.radius;
-                    vmaxX = vol.pos.x + vol.radius;
-                    vminY = vol.pos.y - vol.radius;
-                    vmaxY = vol.pos.y + vol.radius;
-                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, OBBCollider>) {
-                    vminX = min(vol.minExtent.x, vol.maxExtent.x);
-                    vmaxX = max(vol.minExtent.x, vol.maxExtent.x);
-                    vminY = min(vol.minExtent.y, vol.maxExtent.y);
-                    vmaxY = max(vol.minExtent.y, vol.maxExtent.y);
-                } else if constexpr(std::is_same_v<std::decay_t<decltype(vol)>, SphereCollider>) {
-                    vminX = vol.pos.x - vol.radius;
-                    vmaxX = vol.pos.x + vol.radius;
-                    vminY = vol.pos.y - vol.radius;
-                    vmaxY = vol.pos.y + vol.radius;
+                // Compute WORLD AABB for primitive (assume vol has worldMin/Max or transform)
+                // Example for AABB (assume min/max are world)
+                if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, AABBCollider>) {
+                    vminX = vol->min.x;
+                    vmaxX = vol->max.x;
+                    vminY = vol->min.y;
+                    vmaxY = vol->max.y;
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, XTOBBCollider>) {
+                    vminX = vol->min.x;
+                    vmaxX = vol->max.x;
+                    vminY = vol->min.y;
+                    vmaxY = vol->max.y;
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, CylinderCollider>) {
+                    vminX = vol->pos.x - vol->radius;
+                    vmaxX = vol->pos.x + vol->radius;
+                    vminY = vol->pos.y - vol->radius;
+                    vmaxY = vol->pos.y + vol->radius;
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, OBBCollider>) {
+                    // For OBB, compute AABB from extents + transform (approx)
+                    S_vector corners[8] = {/* compute 8 corners from minExtent/maxExtent * transform */};
+                    for(int k = 0; k < 8; ++k) {
+                        vminX = std::min(vminX, corners[k].x);
+                        vmaxX = std::max(vmaxX, corners[k].x);
+                        vminY = std::min(vminY, corners[k].y);
+                        vmaxY = std::max(vmaxY, corners[k].y);
+                    }
+                } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, SphereCollider>) {
+                    vminX = vol->pos.x - vol->radius;
+                    vmaxX = vol->pos.x + vol->radius;
+                    vminY = vol->pos.y - vol->radius;
+                    vmaxY = vol->pos.y + vol->radius;
                 }
+
+                if(vminX > vmaxX || vminY > vmaxY) return; // Degenerate
+
                 auto [c0x, c0y] = WorldToCell(vminX, vminY);
                 auto [c1x, c1y] = WorldToCell(vmaxX, vmaxY);
                 for(int32_t cx = c0x; cx <= c1x; ++cx)
                     for(int32_t cy = c0y; cy <= c1y; ++cy) {
                         size_t cellIdx = static_cast<size_t>(cy) * grid.width + cx;
                         CellBuilder& cb = cellBuilders[cellIdx];
-                        GridCell::Reference ref;
-                        ref.volumeBufferOffset = static_cast<uint32_t>(volumeInfos[volIdx].offset);
-                        ref.volumeType = volumeInfos[volIdx].type;
-                        cb.refs.push_back(ref);
-                        cb.flags.push_back(vol.flags);
+                        cb.refs.push_back({static_cast<int32_t>(volumeInfos[volIdx].offset), type});
+                        cb.flags.push_back(vol->flags);
                     }
-                ++volIdx;
+                //++volIdx;
             };
 
             // AABBs
-            for(const AABBCollider& a: aabbs)
-                AddPrimitive(a, Collider::VOLUME_AABB);
+            for(auto it = aabbs.begin(); it != aabbs.end(); ++it, ++volIdx)
+                AddPrimitive(*it, Collider::VOLUME_AABB);
             // XTOBBs
-            for(const XTOBBCollider& xt: xtobbs)
-                AddPrimitive(xt, Collider::VOLUME_XTOBB);
+            for(auto it = xtobbs.begin(); it != xtobbs.end(); ++it, ++volIdx)
+                AddPrimitive(*it, Collider::VOLUME_XTOBB);
             // Cylinders
-            for(const CylinderCollider& c: cylinders)
-                AddPrimitive(c, Collider::VOLUME_CYLINDER);
+            for(auto it = cylinders.begin(); it != cylinders.end(); ++it, ++volIdx)
+                AddPrimitive(*it, Collider::VOLUME_CYLINDER);
             // OBBs
-            for(const OBBCollider& o: obbs)
-                AddPrimitive(o, Collider::VOLUME_OBB);
+            for(auto it = obbs.begin(); it != obbs.end(); ++it, ++volIdx)
+                AddPrimitive(*it, Collider::VOLUME_OBB);
             // Spheres
-            for(const SphereCollider& s: spheres)
-                AddPrimitive(s, Collider::VOLUME_SPHERE);
+            for(auto it = spheres.begin(); it != spheres.end(); ++it, ++volIdx)
+                AddPrimitive(*it, Collider::VOLUME_SPHERE);
 
             cells.clear();
             cells.reserve(cellBuilders.size());
             for(const CellBuilder& cb: cellBuilders) {
                 GridCell gc;
                 gc.numVolumes = static_cast<uint32_t>(cb.refs.size());
-                gc.height = 1.225675e-32f;
-                gc.width = 1.225374e-32f;
+                gc.height = 0.0f;
+                gc.width = 0.0f;
                 gc.references = cb.refs;
                 gc.flags = cb.flags;
                 cells.push_back(gc);
+            }
+
+            constexpr size_t TRI_BYTE_SIZE = 32; // Confirm exact
+
+            for(GridCell& cell: cells) {
+                if(cell.references.empty()) continue;
+
+                std::vector<std::pair<GridCell::Reference, size_t>> sortedRefs;
+                sortedRefs.reserve(cell.references.size());
+                for(size_t i = 0; i < cell.references.size(); ++i) {
+                    sortedRefs.emplace_back(cell.references[i], i);
+                }
+
+                std::stable_sort(sortedRefs.begin(), sortedRefs.end(), [&](const auto& pa, const auto& pb) {
+                    const GridCell::Reference& ra = pa.first;
+                    const GridCell::Reference& rb = pb.first;
+
+                    if(ra.volumeType >= 0x80 && rb.volumeType < 0x80) return false;
+                    if(ra.volumeType < 0x80 && rb.volumeType >= 0x80) return true;
+                    if(ra.volumeType >= 0x80 && rb.volumeType >= 0x80) return false;
+
+                    size_t triIdxA = (ra.volumeBufferOffset - volumeInfos[0].offset) / TRI_BYTE_SIZE;
+                    size_t triIdxB = (rb.volumeBufferOffset - volumeInfos[0].offset) / TRI_BYTE_SIZE;
+
+                    auto itA = tris.begin();
+                    std::advance(itA, triIdxA);
+                    const TriangleCollider* ta = *itA;
+
+                    auto itB = tris.begin();
+                    std::advance(itB, triIdxB);
+                    const TriangleCollider* tb = *itB;
+
+                    S_vector v1, v2, v3, v4, v5, v6;
+
+                    v1 = ta->vertices[0].vertexPos * ta->vertices[0].linkedFrame->GetWorldMat();
+                    v2 = ta->vertices[1].vertexPos * ta->vertices[1].linkedFrame->GetWorldMat();
+                    v3 = ta->vertices[2].vertexPos * ta->vertices[2].linkedFrame->GetWorldMat();
+                    v4 = tb->vertices[0].vertexPos * tb->vertices[0].linkedFrame->GetWorldMat();
+                    v5 = tb->vertices[1].vertexPos * tb->vertices[1].linkedFrame->GetWorldMat();
+                    v6 = tb->vertices[2].vertexPos * tb->vertices[2].linkedFrame->GetWorldMat();
+
+                    float minAX = std::min({ v1.x, v2.x, v3.x });
+                    float minBX = std::min({v4.x, v5.x, v6.x});
+                    return minAX < minBX;
+                });
+
+                std::vector<uint8_t> newFlags(sortedRefs.size());
+                for(size_t i = 0; i < sortedRefs.size(); ++i) {
+                    cell.references[i] = sortedRefs[i].first;
+                    size_t origIdx = sortedRefs[i].second;
+                    newFlags[i] = cell.flags[origIdx];
+                }
+                cell.flags = std::move(newFlags);
             }
         }
 
         std::vector<CollisionLink> links;
         CollisionGrid grid;
 
-        std::list<Collider*> colliders;
-        std::list<MeshCollider> meshes;
+        std::vector<Collider*> colliders;
+        std::vector<MeshCollider*> meshes;
 
-        std::list<TriangleCollider> tris;
-        std::list<AABBCollider> aabbs;
-        std::list<XTOBBCollider> xtobbs;
-        std::list<CylinderCollider> cylinders;
-        std::list<OBBCollider> obbs;
-        std::list<SphereCollider> spheres;
+        std::vector<TriangleCollider*> tris;
+        std::vector<AABBCollider*> aabbs;
+        std::vector<XTOBBCollider*> xtobbs;
+        std::vector<CylinderCollider*> cylinders;
+        std::vector<OBBCollider*> obbs;
+        std::vector<SphereCollider*> spheres;
 
         std::vector<GridCell> cells;
     };
