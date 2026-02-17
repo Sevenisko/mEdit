@@ -620,10 +620,13 @@ class SceneEditor {
         }
 
         void GenerateGrid() {
+            grid.min = { FLT_MAX,  FLT_MAX};
+            grid.max = {-FLT_MAX, -FLT_MAX};
+
             auto UpdateBounds = [&](const S_vector2& pos) {
                 grid.min.x = min(grid.min.x, pos.x);
                 grid.min.y = min(grid.min.y, pos.y);
-                grid.max.y = max(grid.max.y, pos.y);
+                grid.max.x = max(grid.max.x, pos.x);
                 grid.max.y = max(grid.max.y, pos.y);
             };
 
@@ -669,6 +672,9 @@ class SceneEditor {
             uint32_t gridWidth = static_cast<uint32_t>(std::ceil((grid.max.x - grid.min.x) / grid.cellSize.x));
             uint32_t gridLength = static_cast<uint32_t>(std::ceil((grid.max.y - grid.min.y) / grid.cellSize.y));
 
+            grid.width = gridWidth;
+            grid.length = gridLength;
+
             grid.bounds.x.resize(gridWidth + 1);
             grid.bounds.y.resize(gridLength + 1);
             for(uint32_t i = 0; i <= gridWidth; i++)
@@ -684,6 +690,7 @@ class SceneEditor {
             struct CellBuilder {
                 std::vector<GridCell::Reference> refs;
                 std::vector<uint8_t> flags;
+                float maxHeight = -FLT_MAX;
             };
             std::vector<CellBuilder> cellBuilders(grid.width * grid.length);
 
@@ -702,12 +709,14 @@ class SceneEditor {
                 const TriangleCollider* t = *it;
                 // approximate triangle AABB in WORLD space
                 float tminX = FLT_MAX, tmaxX = -FLT_MAX, tminY = FLT_MAX, tmaxY = -FLT_MAX;
+                float triMaxHeight = -FLT_MAX;
                 for(int j = 0; j < 3; ++j) {
                     const S_vector& p = t->vertices[j].vertexPos * t->vertices[j].linkedFrame->GetWorldMat();
                     tminX = std::min(tminX, p.x);
                     tmaxX = std::max(tmaxX, p.x);
-                    tminY = std::min(tminY, p.y);
-                    tmaxY = std::max(tmaxY, p.y);
+                    tminY = std::min(tminY, p.z);
+                    tmaxY = std::max(tmaxY, p.z);
+                    triMaxHeight = std::max(triMaxHeight, p.y);
                 }
                 if(tminX > tmaxX || tminY > tmaxY) continue; // Degenerate, skip
 
@@ -719,43 +728,58 @@ class SceneEditor {
                         CellBuilder& cb = cellBuilders[cellIdx];
                         cb.refs.push_back({static_cast<int32_t>(volumeInfos[volIdx].offset), volumeInfos[volIdx].type});
                         cb.flags.push_back(t->flags);
+                        cb.maxHeight = std::max(cb.maxHeight, triMaxHeight);
                     }
             }
 
             // ---- primitive volumes -------------------------------------------------
             auto AddPrimitive = [&](const auto* vol, uint8_t type) {
                 float vminX = FLT_MAX, vmaxX = -FLT_MAX, vminY = FLT_MAX, vmaxY = -FLT_MAX;
-                // Compute WORLD AABB for primitive (assume vol has worldMin/Max or transform)
-                // Example for AABB (assume min/max are world)
+                float volMaxHeight = -FLT_MAX;
                 if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, AABBCollider>) {
                     vminX = vol->min.x;
                     vmaxX = vol->max.x;
-                    vminY = vol->min.y;
-                    vmaxY = vol->max.y;
+                    vminY = vol->min.z;
+                    vmaxY = vol->max.z;
+                    volMaxHeight = vol->max.y;
                 } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, XTOBBCollider>) {
                     vminX = vol->min.x;
                     vmaxX = vol->max.x;
-                    vminY = vol->min.y;
-                    vmaxY = vol->max.y;
+                    vminY = vol->min.z;
+                    vmaxY = vol->max.z;
+                    volMaxHeight = vol->max.y;
                 } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, CylinderCollider>) {
                     vminX = vol->pos.x - vol->radius;
                     vmaxX = vol->pos.x + vol->radius;
                     vminY = vol->pos.y - vol->radius;
                     vmaxY = vol->pos.y + vol->radius;
+                    volMaxHeight = 10000.0f; // Cylinder has no world Y info, use safe large value
                 } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, OBBCollider>) {
-                    // For OBB, compute AABB from extents + transform (approx)
-                    S_vector corners[8] = {/* compute 8 corners from minExtent/maxExtent * transform */};
+                    S_vector mn = vol->minExtent;
+                    S_vector mx = vol->maxExtent;
+                    S_vector corners[8] = {
+                        S_vector(mn.x, mn.y, mn.z) * vol->transform,
+                        S_vector(mx.x, mn.y, mn.z) * vol->transform,
+                        S_vector(mn.x, mx.y, mn.z) * vol->transform,
+                        S_vector(mx.x, mx.y, mn.z) * vol->transform,
+                        S_vector(mn.x, mn.y, mx.z) * vol->transform,
+                        S_vector(mx.x, mn.y, mx.z) * vol->transform,
+                        S_vector(mn.x, mx.y, mx.z) * vol->transform,
+                        S_vector(mx.x, mx.y, mx.z) * vol->transform,
+                    };
                     for(int k = 0; k < 8; ++k) {
                         vminX = std::min(vminX, corners[k].x);
                         vmaxX = std::max(vmaxX, corners[k].x);
-                        vminY = std::min(vminY, corners[k].y);
-                        vmaxY = std::max(vmaxY, corners[k].y);
+                        vminY = std::min(vminY, corners[k].z);
+                        vmaxY = std::max(vmaxY, corners[k].z);
+                        volMaxHeight = std::max(volMaxHeight, corners[k].y);
                     }
                 } else if constexpr(std::is_same_v<std::decay_t<decltype(*vol)>, SphereCollider>) {
                     vminX = vol->pos.x - vol->radius;
                     vmaxX = vol->pos.x + vol->radius;
-                    vminY = vol->pos.y - vol->radius;
-                    vmaxY = vol->pos.y + vol->radius;
+                    vminY = vol->pos.z - vol->radius;
+                    vmaxY = vol->pos.z + vol->radius;
+                    volMaxHeight = vol->pos.y + vol->radius;
                 }
 
                 if(vminX > vmaxX || vminY > vmaxY) return; // Degenerate
@@ -768,6 +792,7 @@ class SceneEditor {
                         CellBuilder& cb = cellBuilders[cellIdx];
                         cb.refs.push_back({static_cast<int32_t>(volumeInfos[volIdx].offset), type});
                         cb.flags.push_back(vol->flags);
+                        cb.maxHeight = std::max(cb.maxHeight, volMaxHeight);
                     }
                 //++volIdx;
             };
@@ -794,7 +819,7 @@ class SceneEditor {
                 GridCell gc;
                 gc.numVolumes = static_cast<uint32_t>(cb.refs.size());
                 gc.height = 0.0f;
-                gc.width = 0.0f;
+                gc.width = (cb.maxHeight > -FLT_MAX) ? cb.maxHeight : 0.0f;
                 gc.references = cb.refs;
                 gc.flags = cb.flags;
                 cells.push_back(gc);

@@ -1,4 +1,4 @@
-#include <Editors/SceneEditor.h>
+﻿#include <Editors/SceneEditor.h>
 #include <EditorApplication.h>
 #include <IO/BinaryReader.hpp>
 #include <stdexcept>
@@ -4604,53 +4604,41 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         i++;
     }
 
-    // Remove unreferenced collisions
-    if(!trisToRemove.empty()) {
-        for(size_t i = trisToRemove.size() - 1; i > 0; i--) {
-            delete m_ColManager.tris[i];
-
-            m_ColManager.tris.erase(m_ColManager.tris.begin() + i);
-        }
+    // Remove unreferenced collisions (iterate in reverse to keep indices valid)
+    for(int i = static_cast<int>(trisToRemove.size()) - 1; i >= 0; i--) {
+        size_t idx = trisToRemove[i];
+        delete m_ColManager.tris[idx];
+        m_ColManager.tris.erase(m_ColManager.tris.begin() + idx);
     }
 
-    if(!aabbsToRemove.empty()) {
-        for(size_t i = aabbsToRemove.size() - 1; i > 0; i--) {
-            delete m_ColManager.aabbs[i];
-
-            m_ColManager.aabbs.erase(m_ColManager.aabbs.begin() + i);
-        }
+    for(int i = static_cast<int>(aabbsToRemove.size()) - 1; i >= 0; i--) {
+        size_t idx = aabbsToRemove[i];
+        delete m_ColManager.aabbs[idx];
+        m_ColManager.aabbs.erase(m_ColManager.aabbs.begin() + idx);
     }
 
-    if(!xtobbsToRemove.empty()) {
-        for(size_t i = xtobbsToRemove.size() - 1; i > 0; i--) {
-            delete m_ColManager.xtobbs[i];
-
-            m_ColManager.xtobbs.erase(m_ColManager.xtobbs.begin() + i);
-        }
+    for(int i = static_cast<int>(xtobbsToRemove.size()) - 1; i >= 0; i--) {
+        size_t idx = xtobbsToRemove[i];
+        delete m_ColManager.xtobbs[idx];
+        m_ColManager.xtobbs.erase(m_ColManager.xtobbs.begin() + idx);
     }
 
-    if(!cylindersToRemove.empty()) {
-        for(size_t i = cylindersToRemove.size() - 1; i > 0; i--) {
-            delete m_ColManager.cylinders[i];
-
-            m_ColManager.cylinders.erase(m_ColManager.cylinders.begin() + i);
-        }
+    for(int i = static_cast<int>(cylindersToRemove.size()) - 1; i >= 0; i--) {
+        size_t idx = cylindersToRemove[i];
+        delete m_ColManager.cylinders[idx];
+        m_ColManager.cylinders.erase(m_ColManager.cylinders.begin() + idx);
     }
 
-    if(!obbsToRemove.empty()) {
-        for(size_t i = obbsToRemove.size() - 1; i > 0; i--) {
-            delete m_ColManager.obbs[i];
-
-            m_ColManager.obbs.erase(m_ColManager.obbs.begin() + i);
-        }
+    for(int i = static_cast<int>(obbsToRemove.size()) - 1; i >= 0; i--) {
+        size_t idx = obbsToRemove[i];
+        delete m_ColManager.obbs[idx];
+        m_ColManager.obbs.erase(m_ColManager.obbs.begin() + idx);
     }
 
-    if(!spheresToRemove.empty()) {
-        for(size_t i = spheresToRemove.size() - 1; i > 0; i--) {
-            delete m_ColManager.spheres[i];
-
-            m_ColManager.spheres.erase(m_ColManager.spheres.begin() + i);
-        }
+    for(int i = static_cast<int>(spheresToRemove.size()) - 1; i >= 0; i--) {
+        size_t idx = spheresToRemove[i];
+        delete m_ColManager.spheres[idx];
+        m_ColManager.spheres.erase(m_ColManager.spheres.begin() + idx);
     }
 
     reader.Seek(sizeof(int32_t), SEEK_CUR); // Skip 1 int32 for VERSION_MAFIA
@@ -5470,7 +5458,10 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                             uint32_t newId = static_cast<uint32_t>(m_ColManager.links.size());
                             CollisionLink::LinkType linkType = CollisionLink::LINK_SURFACE;
                             m_ColManager.links.push_back({linkType, frame});
-                            frameToId[frame] = newId; // Auto-index
+                            frameToId[frame] = newId;
+                        } else {
+                            auto& link = m_ColManager.links[frameToId[frame]];
+                            link.type = static_cast<CollisionLink::LinkType>(link.type | CollisionLink::LINK_SURFACE);
                         }
                     }
                 }
@@ -5484,7 +5475,10 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     uint32_t newId = static_cast<uint32_t>(m_ColManager.links.size());
                     CollisionLink::LinkType linkType = CollisionLink::LINK_VOLUME;
                     m_ColManager.links.push_back({linkType, frame});
-                    frameToId[frame] = newId; // Auto-index
+                    frameToId[frame] = newId;
+                } else {
+                    auto& link = m_ColManager.links[frameToId[frame]];
+                    link.type = static_cast<CollisionLink::LinkType>(link.type | CollisionLink::LINK_VOLUME);
                 }
             } break;
             case Collider::VOLUME_XTOBB: {
@@ -5496,7 +5490,10 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     uint32_t newId = static_cast<uint32_t>(m_ColManager.links.size());
                     CollisionLink::LinkType linkType = CollisionLink::LINK_VOLUME;
                     m_ColManager.links.push_back({linkType, frame});
-                    frameToId[frame] = newId; // Auto-index
+                    frameToId[frame] = newId;
+                } else {
+                    auto& link = m_ColManager.links[frameToId[frame]];
+                    link.type = static_cast<CollisionLink::LinkType>(link.type | CollisionLink::LINK_VOLUME);
                 }
             } break;
             case Collider::VOLUME_CYLINDER: {
@@ -5508,7 +5505,10 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     uint32_t newId = static_cast<uint32_t>(m_ColManager.links.size());
                     CollisionLink::LinkType linkType = CollisionLink::LINK_VOLUME;
                     m_ColManager.links.push_back({linkType, frame});
-                    frameToId[frame] = newId; // Auto-index
+                    frameToId[frame] = newId;
+                } else {
+                    auto& link = m_ColManager.links[frameToId[frame]];
+                    link.type = static_cast<CollisionLink::LinkType>(link.type | CollisionLink::LINK_VOLUME);
                 }
             } break;
             case Collider::VOLUME_OBB: {
@@ -5520,7 +5520,10 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     uint32_t newId = static_cast<uint32_t>(m_ColManager.links.size());
                     CollisionLink::LinkType linkType = CollisionLink::LINK_VOLUME;
                     m_ColManager.links.push_back({linkType, frame});
-                    frameToId[frame] = newId; // Auto-index
+                    frameToId[frame] = newId;
+                } else {
+                    auto& link = m_ColManager.links[frameToId[frame]];
+                    link.type = static_cast<CollisionLink::LinkType>(link.type | CollisionLink::LINK_VOLUME);
                 }
             } break;
             case Collider::VOLUME_SPHERE: {
@@ -5532,7 +5535,10 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     uint32_t newId = static_cast<uint32_t>(m_ColManager.links.size());
                     CollisionLink::LinkType linkType = CollisionLink::LINK_VOLUME;
                     m_ColManager.links.push_back({linkType, frame});
-                    frameToId[frame] = newId; // Auto-index
+                    frameToId[frame] = newId;
+                } else {
+                    auto& link = m_ColManager.links[frameToId[frame]];
+                    link.type = static_cast<CollisionLink::LinkType>(link.type | CollisionLink::LINK_VOLUME);
                 }
             } break;
             }
@@ -5614,18 +5620,23 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
         // NOTE: I need to undefine "min" here in order to make std::min work
         #undef min
 
+        // Track array start positions relative to gridDataOffset for cell reference fixup
+        size_t faceBaseOffset = writer.GetCurPos() - gridDataOffset;
+
         // Write face collisions
         for(const TriangleCollider* collider: m_ColManager.tris) {
             colliderInfos.push_back({writer.GetCurPos(), collider->type});
             collider->WriteData(&writer);
             for(int j = 0; j < 3; ++j) {
                 writer.WriteUInt16(collider->vertices[j].vertexBufferIndex);
-                uint32_t linkId = frameToId[collider->vertices[0].linkedFrame];
+                uint32_t linkId = frameToId[collider->vertices[j].linkedFrame];
                 writer.WriteUInt16(linkId);
             }
             writer.WriteVec3(collider->plane.normal);
             writer.WriteSingle(collider->plane.distance);
         }
+
+        size_t aabbBaseOffset = writer.GetCurPos() - gridDataOffset;
 
         // Write AABB collisions
         for(const AABBCollider* collider: m_ColManager.aabbs) {
@@ -5636,6 +5647,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteVec3(collider->min);
             writer.WriteVec3(collider->max);
         }
+
+        size_t xtobBaseOffset = writer.GetCurPos() - gridDataOffset;
 
         // Write XTOBB collisions
         for(const XTOBBCollider* collider: m_ColManager.xtobbs) {
@@ -5651,6 +5664,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteMatrix(collider->inverseTransform);
         }
 
+        size_t cylinderBaseOffset = writer.GetCurPos() - gridDataOffset;
+
         // Write cylinder collisions
         for(const CylinderCollider* collider: m_ColManager.cylinders) {
             colliderInfos.push_back({writer.GetCurPos(), collider->type});
@@ -5660,6 +5675,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteVec2(collider->pos);
             writer.WriteSingle(collider->radius);
         }
+
+        size_t obbBaseOffset = writer.GetCurPos() - gridDataOffset;
 
         // Write OBB collisions
         for(const OBBCollider* collider: m_ColManager.obbs) {
@@ -5673,6 +5690,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
             writer.WriteMatrix(collider->inverseTransform);
         }
 
+        size_t sphereBaseOffset = writer.GetCurPos() - gridDataOffset;
+
         // Write sphere collisions
         for(const SphereCollider* collider: m_ColManager.spheres) {
             colliderInfos.push_back({writer.GetCurPos(), collider->type});
@@ -5685,19 +5704,42 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
         writer.WriteInt32(0); // Bogus integer to fill up the space
 
-        // NOTE: That one is very, VERY FUCKING likely to be absolutely FUCKED
-        // TODO: Make sure the game doesn't crash every fucking time
         m_ColManager.GenerateCells(colliderInfos);
+
+        // Adjust cell reference offsets from absolute file positions to
+        // byte offsets relative to the start of each volume type's array
+        for(GridCell& cell: m_ColManager.cells) {
+            for(GridCell::Reference& ref: cell.references) {
+                size_t absOffset = static_cast<size_t>(ref.volumeBufferOffset);
+                size_t base;
+                if(ref.volumeType < 0x80) {
+                    base = faceBaseOffset;
+                } else {
+                    switch(ref.volumeType) {
+                    case Collider::VOLUME_XTOBB:    base = xtobBaseOffset;     break;
+                    case Collider::VOLUME_AABB:     base = aabbBaseOffset;     break;
+                    case Collider::VOLUME_SPHERE:   base = sphereBaseOffset;   break;
+                    case Collider::VOLUME_OBB:      base = obbBaseOffset;      break;
+                    case Collider::VOLUME_CYLINDER:  base = cylinderBaseOffset; break;
+                    default: base = 0; break;
+                    }
+                }
+                ref.volumeBufferOffset = static_cast<int32_t>(absOffset - gridDataOffset - base);
+            }
+        }
 
         // Write grid cells
         for(const GridCell& cell: m_ColManager.cells) {
             writer.WriteUInt32(cell.numVolumes);
-            writer.WriteSingle(cell.height);
-            writer.WriteSingle(cell.width);
-            writer.WriteInt32(-971227136);
+            writer.WriteInt32(0);               // offset 4: overwritten by pReferences at runtime
+            writer.WriteSingle(cell.height);     // offset 8: overwritten by pFlags at runtime
+            writer.WriteSingle(cell.width);      // offset 12: max Y height threshold used by collision checks
             if(cell.numVolumes) {
                 for(const GridCell::Reference& ref: cell.references) {
-                    int32_t packed = (ref.volumeType << 24) | (ref.volumeBufferOffset & 0x00FFFFFF);
+                    // Face refs: type byte must be 0x00 (loader adds full 32-bit value to pFaces).
+                    // Volume refs: type byte identifies the volume kind (0x80-0x84).
+                    uint8_t packedType = (ref.volumeType < 0x80) ? 0x00 : static_cast<uint8_t>(ref.volumeType);
+                    int32_t packed = (packedType << 24) | (ref.volumeBufferOffset & 0x00FFFFFF);
                     writer.WriteInt32(packed);
                 }
                 for(uint8_t flag: cell.flags) {
