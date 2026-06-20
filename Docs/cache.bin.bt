@@ -1,0 +1,94 @@
+struct Vector2
+{
+    float x;
+    float y;
+};
+
+struct Vector3
+{
+    float x;
+    float y;
+    float z;
+};
+
+struct Quaternion
+{
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+enum <ushort> NodeType
+{
+    City = 0x01f4,    // CT_CITY
+    Part = 0x03e8,    // CT_PART
+    Frame = 0x07d0    // CT_FRAME
+};
+
+struct Node;
+
+local uint64 fileSize = FileSize(); // Retrieve total file size at the start
+
+struct Node
+{
+    NodeType type;
+    uint size;
+
+    local uint pos = FTell(); // Track position for chunk boundary
+
+    switch(type)
+    {
+        case City:
+        {
+            uint version; // Version number of the cache file
+            while(pos + (size - 6) > FTell() && FTell() < fileSize)
+            {
+                Node node; // Nested CT_PART nodes
+            }
+        }
+        break;
+
+        case Part:
+        {
+            int numChars;
+            char name[numChars]; // Null-terminated string for part name
+            Vector2 pos;              // 8 bytes
+            float radius;             // 4 bytes
+            Vector2 leftBottomCorner; // 8 bytes
+            Vector2 leftSide;         // 8 bytes
+            Vector2 rightBottomCorner;// 8 bytes
+            Vector2 rightSide;        // 8 bytes
+            Vector2 leftTopCorner;    // 8 bytes
+            Vector2 bottomSide;       // 8 bytes
+            Vector2 rightTopCorner;   // 8 bytes
+            Vector2 topSide;          // 8 bytes
+            while(pos + (size - 6) > FTell() && FTell() < fileSize)
+            {
+                Node node; // Nested CT_FRAME nodes
+            }
+        }
+        break;
+
+        case Frame:
+        {
+            int numChars;
+            char frameModel[numChars]; // Null-terminated string for frame model name
+            Vector3 pos;              // Position vector
+            Quaternion rot;           // Rotation quaternion
+            Vector3 scale;            // Scale vector
+            uint unk;                 // Unknown uint32 value
+            Vector3 scale2;           // Second scale vector
+        }
+        break;
+
+        default:
+            local uint dataSize = size;
+            local uint arraySize = dataSize - 6;
+            if(arraySize != 2667577340)
+                ubyte data[arraySize];
+        break;
+    }
+};
+
+Node file;

@@ -51,9 +51,12 @@ add_executable(mEdit WIN32
     "Source/Data/ItemsDatabase.cpp"
     
     "Source/IO/FileSystem.cpp"
+    "Source/IO/ChgFile.cpp"
 
     "Source/Editors/TextEditor.cpp"
-    "Source/Editors/SceneEditor.cpp" 
+    "Source/Editors/BaseEditor.cpp"
+    "Source/Editors/SceneEditor.cpp"
+    "Source/Editors/CutsceneEditor.cpp"
     "Source/Cache.cpp" )
 
 file(GLOB LS3D_BIN_FILES "${ROOT_DIR}/Vendors/LS3D/Bin/*")

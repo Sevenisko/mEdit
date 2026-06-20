@@ -10,7 +10,7 @@
 
 #include "EditorSettings.h"
 
-class EditorWindow;
+class BaseEditor;
 
 #define TARGET_FPS_CAP 250
 
@@ -30,9 +30,12 @@ class EditorApplication {
 
     EditorSettings* GetSettings() { return &m_Settings; }
 
+    BaseEditor* GetActiveEditor() const { return m_ActiveEditor; }
+
   private:
     bool m_IsRunning = false;
 
+    BaseEditor* m_ActiveEditor = nullptr;
     EditorSettings m_Settings;
 };
 

@@ -1,7 +1,9 @@
 #include <EditorApplication.h>
 #include <Utils.h>
 #include <Config.h>
+#include <Editors/BaseEditor.h>
 #include <Editors/SceneEditor.h>
+#include <Editors/CutsceneEditor.h>
 #include <IO/FileSystem.h>
 
 #include <rw_data.h>
@@ -153,22 +155,27 @@ bool EditorApplication::Init(HINSTANCE hInstance, const std::string& cmdLine) {
 
     FileSystem::Init();
 
-    SceneEditor::Get()->Init();
+    // Select editor based on command line flags
+    if(cmdLine.find("-cutscene") != std::string::npos) {
+        m_ActiveEditor = CutsceneEditor::Get();
+    } else {
+        m_ActiveEditor = SceneEditor::Get();
+    }
+
+    m_ActiveEditor->Init();
 
     m_IsRunning = true;
     return true;
 }
 
 void EditorApplication::Update() {
-    bool m_CanClose = true;
+    m_ActiveEditor->Update();
 
-    SceneEditor::Get()->Update();
-
-    if(!SceneEditor::Get()->IsInit()) m_IsRunning = false;
+    if(!m_ActiveEditor->IsInit()) m_IsRunning = false;
 }
 
 void EditorApplication::Shutdown() {
     m_Settings.Save("mEdit\\settings.json");
 
-    if(SceneEditor::Get()->IsInit()) SceneEditor::Get()->Shutdown();
+    if(m_ActiveEditor->IsInit()) m_ActiveEditor->Shutdown();
 }

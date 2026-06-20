@@ -29,7 +29,10 @@
 #include <d3d8.h>
 #include <ImGuizmo.h>
 #include <Editors/ScriptEditor.h>
+#include <Editors/BaseEditor.h>
 #include <set>
+
+#include <IO/ChgFile.h>
 
 #include <Config.h>
 
@@ -41,11 +44,6 @@ class I3D_lit_object;
 #define MISSION_VER_MINOR 10
 
 enum MenuCommand {
-    // File menu
-    MCMD_FILE_OPEN = 100,
-    MCMD_FILE_SAVE,
-    MCMD_FILE_CLOSE,
-
     // View menu
     MCMD_VIEW_WEBNODES = 200,
     MCMD_VIEW_ROADPOINTS,
@@ -98,10 +96,17 @@ enum MenuCommand {
     MCMD_WINDOW_LMG,
 
     // Help menu
-    MCMD_HELP_ABOUT = 600
+    MCMD_HELP_ABOUT = 600,
+
+    // Differences menu
+    MCMD_DIFF_OPEN = 700,
+    MCMD_DIFF_SAVE,
+    MCMD_DIFF_SAVE_AS,
+    MCMD_DIFF_CLOSE,
+    MCMD_DIFF_NEW_FRAME
 };
 
-class SceneEditor {
+class SceneEditor : public BaseEditor {
   public:
 #pragma pack(push, 1)
     struct RoadLane {
@@ -187,25 +192,26 @@ class SceneEditor {
         return &editor;
     }
 
-    bool Init();
-    void Update();
-    void Shutdown();
-
-    bool IsInit() const;
-
-    bool IsOpened() const { return !m_MissionPath.empty(); }
+    // BaseEditor virtual overrides
+    void OnUpdate() override;
+    void OnRender3D() override;
+    void OnRenderUI() override;
+    void OnDockLayout(ImGuiID dockspaceId) override;
+    void OnMenuSetup() override;
+    void OnMenuCommand(WORD cmd) override;
+    void OnFileOpen() override;
+    void OnFileClose() override;
+    const char* GetEditorName() override { return "Scene Editor"; }
+    const char* GetIconPath() override { return "mEdit\\Images\\Icons\\SceneEditor.png"; }
+    void OnSceneLoaded() override;
+    void OnClear() override;
 
     bool IsShowingSceneSettings() const { return m_ShowingSceneSettings; }
     bool IsShowingCollisionSettings() const { return m_ShowingCollisionSettings; }
 
     bool IsShowingLightmapDialog() const { return m_ShowLightmapDialog; }
 
-    std::string GetMissionPath() const { return m_MissionPath; }
-
     ScriptEditor* GetScriptEditor() { return &m_ScriptEditor; }
-
-    I3D_scene* GetScene() const { return m_Scene; }
-    I3D_camera* GetCamera() const { return m_Camera; }
 
     void ShowSceneSettings() { m_ShowingSceneSettings = true; }
     void ShowCollisionSettings() { m_ShowingCollisionSettings = true; }
@@ -249,20 +255,6 @@ class SceneEditor {
         CheckMenuItem(m_ViewMenu, MCMD_VIEW_CITYPARTS, MF_BYCOMMAND | state);
 
         return m_DrawCityParts;
-    }
-
-    HWND GetWindowHandle() const { return m_IGraph->GetMainHWND(); }
-
-    ImGuiContext* GetImGuiContext() const { return m_ImGuiContext; }
-
-    void SetLoadProgress(float progress) { m_LoadPercentage = progress; }
-    void DrawProgress(const std::string& title = "Loading scene, please wait...");
-
-    void MoveCameraToTarget(const S_vector& pos) {
-        m_IsMovingTowardsTarget = true;
-        auto dir = m_Camera->GetDir();
-        dir *= 3.5f;
-        m_TargetPos = pos - dir;
     }
 
     void SelectFrame(I3D_frame* frame) {
@@ -373,20 +365,20 @@ class SceneEditor {
     Actor* CreateActor(ActorType type, I3D_frame* frame);
     void DeleteActor(I3D_frame* frame);
 
-    void ShowPopupMessage(const std::string& msg, float duration = 5.0f, float fadeOutAt = 2.0f) {
-        m_DrawPopupMessage = true;
-        m_PopupMessageTime = 0;
-        m_PopupMessageDuration = duration;
-        m_PopupMessageFadeOutStart = fadeOutAt;
-        m_PopupMessage = msg;
-    }
-
     bool Load(const std::string& path);
     void Save(const std::string& path);
 
-    void ToggleInput(bool state);
-
-    void Clear();
+    // Differences (.chg) support
+    bool LoadDiffFile(const std::string& path);
+    bool SaveDiffFile(const std::string& path);
+    void CloseDiffFile();
+    void ApplyDiffToScene();
+    void CleanupDiffSceneFrames();
+    void AddDiffFrameDefinition(uint32_t frameType);
+    void RemoveDiffEntry(int index);
+    void UpdateDiffEntryFromScene(int index);
+    void RenderDiffPanel();
+    void RenderDiffInspector();
 
   private:
     inline I3D_frame* FindModelAncestor(I3D_frame* frame) {
@@ -1159,28 +1151,6 @@ class SceneEditor {
         return hierarchy;
     }
 
-    struct LineVertex {
-        float x, y, z; // Position
-        DWORD color; // Color (0xAARRGGBB)
-    };
-
-    void DrawBatchedLines(const std::vector<LineVertex>& vertices,
-                          const std::vector<WORD>& indices = {}, // Optional indices
-                          const S_vector& color = {1, 1, 1},
-                          uint8_t alpha = 0x00);
-    void DrawWireframeBox(const I3D_bbox& bbox, const S_vector& color, uint8_t alpha);
-    void DrawWireframeCone(const S_vector& pos, const S_vector& dir, float radius, float height, const S_vector& color, uint8_t alpha, int segments = 16);
-    void DrawWireframeCylinder(const S_vector& basePos, float radius, float height, const S_vector& color, uint32_t alpha, int segments = 16);
-    void DrawWireframeFrustum(const S_vector& pos,
-                              const S_vector& dir,
-                              float widthTop,
-                              float heightTop,
-                              float widthBottom,
-                              float heightBottom,
-                              float height,
-                              const S_vector& color,
-                              uint8_t alpha);
-
     bool LoadSceneBin(const std::string& fileName);
     bool LoadCacheBin(const std::string& fileName);
     bool LoadRoadBin(const std::string& fileName);
@@ -1285,16 +1255,6 @@ class SceneEditor {
         void* payloadUserData;
     };
 
-    IGraph* m_IGraph = nullptr;
-    I3D_driver* m_3DDriver = nullptr;
-    ISND_driver* m_SoundDriver = nullptr;
-
-    I3D_scene* m_Scene = nullptr;
-    I3D_camera* m_Camera = nullptr;
-
-    I3D_sector* m_PrimarySector = nullptr;
-    I3D_sector* m_BackdropSector = nullptr;
-
     ITexture* m_SoundIconTexture = nullptr;
     ITexture* m_LightIconTexture = nullptr;
     ITexture* m_CameraIconTexture = nullptr;
@@ -1309,14 +1269,6 @@ class SceneEditor {
     I3D_material* m_TrafficIconMaterial = nullptr;
     I3D_material* m_PedsIconMaterial = nullptr;
 
-    ImGuiContext* m_ImGuiContext = nullptr;
-
-    IDirect3DDevice8* m_D3DDevice = nullptr;
-
-    IDirectInputDevice8A* m_LS3DMouseDevice = nullptr;
-
-    HMENU m_MenuBar = nullptr;
-    HMENU m_FileMenu = nullptr;
     HMENU m_ViewMenu = nullptr;
     HMENU m_EditMenu = nullptr;
     HMENU m_CreateMenu = nullptr;
@@ -1345,14 +1297,7 @@ class SceneEditor {
     std::map<uint16_t, RoadCrosspoint> m_RoadCrosspoints{};
     std::map<uint16_t, WebNode> m_WebNodes{};
 
-    std::string m_MissionPath = "";
-
     std::string m_MissionFileSignature = " - Mafia mission file - written using " PROJECT_NAME " v" PROJECT_VER " -";
-
-    S_vector m_CameraPos = {0, 0, 0};
-    S_vector m_CurCameraVelocity = {0, 0, 0};
-    S_vector m_TargetCameraVelocity = {0, 0, 0};
-    S_vector2 m_CameraRot = {0, 0};
 
     char m_SelectedFrameName[256]{0};
     char m_SelectedFrameModel[256]{0};
@@ -1363,17 +1308,8 @@ class SceneEditor {
 
     ImGuizmo::OPERATION m_CurrentTransformOperation = ImGuizmo::TRANSLATE;
 
-    bool m_IsMovingTowardsTarget = false;
-    S_vector m_TargetPos = {0, 0, 0};
-
-    std::chrono::steady_clock::time_point m_LastFrameTime;
-    float m_DeltaTime;
-
-    float m_CameraFOV = 0;
-
     size_t m_CurFileSize = 0;
     size_t m_CurReadBytes = 0;
-    float m_LoadPercentage = 0.0f;
 
     ScriptEditor m_ScriptEditor;
 
@@ -1389,11 +1325,6 @@ class SceneEditor {
 
     CollisionManager m_ColManager;
 
-    bool m_KeyboardEnabled = false;
-    bool m_MouseEnabled = false;
-
-    bool m_SceneLoaded = false;
-
     bool m_OpenFileDialog = false;
     bool m_ShowingSceneSettings = false;
     bool m_ShowingCollisionSettings = false;
@@ -1402,12 +1333,6 @@ class SceneEditor {
     bool m_DrawRoadPoints = false;
     bool m_DrawCollisions = false;
     bool m_DrawCityParts = false;
-
-    bool m_DrawPopupMessage = false;
-    float m_PopupMessageTime = 0;
-    float m_PopupMessageDuration = 5.0f;
-    float m_PopupMessageFadeOutStart = 2.0f;
-    std::string m_PopupMessage = "";
 
     uint16_t m_HighestCrosspointID = 0;
     uint16_t m_HighestWaypointID = 0;
@@ -1437,4 +1362,13 @@ class SceneEditor {
     int m_GridSize = 64;
 
     bool m_ShowLightmapDialog = false;
+
+    // Differences (.chg) state
+    ChgFile m_DiffFile;
+    std::string m_DiffFilePath;
+    bool m_DiffLoaded = false;
+    bool m_DiffDirty = false;
+    int m_SelectedDiffEntry = -1;
+    std::vector<I3D_frame*> m_DiffCreatedFrames;
+    HMENU m_DiffMenu = nullptr;
 };

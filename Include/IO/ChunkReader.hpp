@@ -62,6 +62,12 @@ class ChunkReader {
 
     inline size_t CurPos() const { return m_ReadBytes; }
 
+    size_t GetRemainingBytes() const {
+        if (m_ChunkStack.empty()) return 0;
+        const auto& top = m_ChunkStack.back();
+        return (top.Pos + top.ChunkSize) - m_Reader->GetCurPos();
+    }
+
     operator bool() const { return Size() > 0; }
 
   private:

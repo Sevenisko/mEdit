@@ -81,6 +81,18 @@ class BinaryWriter {
         WriteSingle(value.y);
         WriteSingle(value.z);
     }
+    void WriteQuatWXYZ(const S_quat& q) {
+        WriteSingle(q.w);
+        WriteSingle(q.x);
+        WriteSingle(q.y);
+        WriteSingle(q.z);
+    }
+    void WriteQuatXYZW(const S_quat& q) {
+        WriteSingle(q.x);
+        WriteSingle(q.y);
+        WriteSingle(q.z);
+        WriteSingle(q.w);
+    }
     void WriteMatrix(const S_matrix& value) {
         WriteSingle(value.m_11);
         WriteSingle(value.m_12);

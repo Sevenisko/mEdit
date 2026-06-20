@@ -25,6 +25,7 @@
 #include <Utils/WinUtils.h>
 
 #include <imgui_stdlib.h>
+#include <imgui_internal.h>
 #include <imgui_impl_dx8.h>
 #include <imgui_impl_dinput.h>
 #include <imgui_impl_win32.h>
@@ -35,13 +36,14 @@
 
 #define GAME_FOV 1.22173f
 
-std::map<I3D_sound*, std::string> g_SoundsMap;
-std::map<I3D_model*, std::string> g_ModelsMap;
-
-static WNDPROC g_OriginalWndProc = NULL;
-static WNDPROC g_OriginalChildWndProc = NULL;
+// g_SoundsMap and g_ModelsMap are defined in BaseEditor.cpp
 
 static bool g_ChangesMade = false;
+
+// Log functions are defined in BaseEditor.cpp
+extern void editorLog(const char* fmt, ...);
+extern void editorLogWarning(const char* fmt, ...);
+extern void editorLogError(const char* fmt, ...);
 
 S_vector g_AABBColor(0.57f, 0.96f, 0.55f);
 S_vector g_OBBColor(0.12f, 0.92f, 0.08f);
@@ -50,7 +52,7 @@ S_vector g_SphereColor(0.78f, 0.93f, 0.25f);
 S_vector g_CylinderColor(0.60f, 0.75f, 0.07f);
 S_vector g_FaceColor(0.25f, 0.93f, 0.84f);
 
-std::string OpenFileDialog(FileDialog::Mode mode, const std::string& title, const std::vector<FileDialog::Filter>& filters) {
+std::string SceneOpenFileDialog(FileDialog::Mode mode, const std::string& title, const std::vector<FileDialog::Filter>& filters) {
     FileDialog dialog(mode, title, filters);
     if(dialog.Show(GetIGraph()->GetMainHWND())) {
         if(dialog.GetResult().valid) { return dialog.GetResult().path; }
@@ -60,255 +62,147 @@ std::string OpenFileDialog(FileDialog::Mode mode, const std::string& title, cons
 }
 
 std::string ProcessFileName(const std::string& path, const std::string& newExt) {
-    // Find the last directory separator
     size_t lastSlash = path.find_last_of("\\/");
-    // Extract filename (including extension)
     std::string filename = (lastSlash == std::string::npos) ? path : path.substr(lastSlash + 1);
 
-    // Find the last dot to locate the extension
     size_t lastDot = filename.find_last_of('.');
     if(lastDot == std::string::npos) {
-        // No extension found, just append new extension
         return filename + '.' + newExt;
     }
 
-    // Replace extension
     return filename.substr(0, lastDot + 1) + newExt;
 }
 
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-LRESULT CALLBACK EditorChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch(msg) {
-    case WM_DESTROY:
-        // Restore original WndProc to avoid crashes
-        if(g_OriginalChildWndProc) {
-            SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)g_OriginalChildWndProc);
-            g_OriginalChildWndProc = NULL;
-        }
-        break;
-    }
-
-    ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
-
-    return CallWindowProc(g_OriginalChildWndProc, hwnd, msg, wParam, lParam);
+void SceneEditor::OnFileOpen() {
+    std::string path = SceneOpenFileDialog(FileDialog::Mode::SelectDirectory, "Select mission", {});
+    if(!path.empty()) Load(path);
 }
 
-LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    std::string path = "";
+void SceneEditor::OnFileClose() {
+    if(IsOpened() && g_ChangesMade) {
+        int res = MessageBoxA(GetWindowHandle(), "It seems like you've edited the scene.\nWould you like to save the changes?", "mEdit", MB_ICONQUESTION | MB_YESNOCANCEL);
+        switch(res) {
+        case IDYES: Save(GetMissionPath()); break;
+        case IDNO: break;
+        case IDCANCEL: return;
+        }
+    }
+}
+
+void SceneEditor::OnMenuCommand(WORD cmd) {
+    std::string path;
     I3D_frame* frame = nullptr;
-    SceneEditor::RoadCrosspoint* cross = nullptr;
-    SceneEditor::RoadWaypoint* point = nullptr;
-    SceneEditor::WebNode* node = nullptr;
+    RoadCrosspoint* cross = nullptr;
+    RoadWaypoint* point = nullptr;
+    WebNode* node = nullptr;
     GameScript* script = nullptr;
 
-    switch(msg) {
-    case WM_COMMAND:
-        switch(LOWORD(wParam)) {
-        case MCMD_FILE_OPEN:
-            //debugPrintf("Menu: Open selected\n");
-
-            path = OpenFileDialog(FileDialog::Mode::SelectDirectory, "Select mission", {});
-
-            if(!path.empty()) SceneEditor::Get()->Load(path);
-
-            //SceneEditor::Get()->Load("Missions\\TUTORIAL");
-            return 0;
-        case MCMD_FILE_SAVE:
-            if(SceneEditor::Get()->IsOpened()) { SceneEditor::Get()->Save(SceneEditor::Get()->GetMissionPath()); }
-
-            return 0;
-        case MCMD_FILE_CLOSE:
-            if(SceneEditor::Get()->IsOpened() && g_ChangesMade) {
-                int res =
-                    MessageBoxA(hwnd, "It seems like you've edited the scene.\nWould you like to save the changes?", "mEdit", MB_ICONQUESTION | MB_YESNOCANCEL);
-
-                switch(res) {
-                case IDYES: SceneEditor::Get()->Save(SceneEditor::Get()->GetMissionPath()); break;
-                case IDNO: break;
-                case IDCANCEL: return 0;
-                }
-            }
-
-            SceneEditor::Get()->Shutdown();
-            ExitProcess(0);
-            return 0;
-        case MCMD_VIEW_WEBNODES: SceneEditor::Get()->ToggleWebView(); return 0;
-        case MCMD_VIEW_ROADPOINTS: SceneEditor::Get()->ToggleRoadView(); return 0;
-        case MCMD_VIEW_CITYPARTS: SceneEditor::Get()->ToggleCityPartsView(); return 0;
-        case MCMD_VIEW_COLLISIONS: SceneEditor::Get()->ToggleCollisionView(); return 0;
-        case MCMD_EDIT_COPY:
-            if(frame != nullptr) { SceneEditor::Get()->CopySelection(); }
-
-            return 0;
-        case MCMD_EDIT_PASTE: SceneEditor::Get()->PasteSelection(); return 0;
-        case MCMD_EDIT_DUPLICATE:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame != nullptr) {
-                SceneEditor::Get()->CopySelection();
-                SceneEditor::Get()->PasteSelection();
-            }
-            return 0;
-        case MCMD_EDIT_DELETE: SceneEditor::Get()->DeleteSelection(); return 0;
-        case MCMD_CREATE_DUMMY: SceneEditor::Get()->CreateDummy(true); return 0;
-        case MCMD_CREATE_SOUND: {
-            path = OpenFileDialog(FileDialog::Mode::OpenFile, "Select sound file", {{"Wave Sound File (*.wav)", "*.wav"}});
-
-            if(!path.empty()) { SceneEditor::Get()->CreateSound(ProcessFileName(path, "wav"), true); }
-
-            return 0;
-        }
-        case MCMD_CREATE_LIGHT: SceneEditor::Get()->CreateLight(true); return 0;
-        case MCMD_CREATE_MODEL: {
-            path = OpenFileDialog(FileDialog::Mode::OpenFile, "Select model file", {{"4DS Model File (*.4ds)", "*.4ds"}});
-
-            if(!path.empty()) { SceneEditor::Get()->CreateModel(ProcessFileName(path, "i3d"), true); }
-
-            return 0;
-        case MCMD_CREATE_PLAYER:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_PLAYER, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        case MCMD_CREATE_HUMAN:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_ENEMY, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        case MCMD_CREATE_CAR:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_CAR, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        case MCMD_CREATE_DETECTOR:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_DETECTOR, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        case MCMD_CREATE_RAILWAY:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_RAILWAY, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        case MCMD_CREATE_PEDMAN:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_PEDESTRIANS, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        case MCMD_CREATE_TRAFFICMAN:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_TRAFFIC, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        case MCMD_CREATE_PHYSICAL:
-            frame = SceneEditor::Get()->GetSelectedFrame();
-            if(frame) {
-                if(SceneEditor::Get()->GetActor(frame) == nullptr) {
-                    SceneEditor::Get()->CreateActor(ACTOR_PHYSICAL, frame);
-                } else {
-                    SceneEditor::Get()->ShowPopupMessage("The frame already has an actor!");
-                }
-            } else {
-                SceneEditor::Get()->ShowPopupMessage("Cannot create an actor without a frame!");
-            }
-            return 0;
-        }
-        case MCMD_CREATE_CROSSPOINT:
-            cross = SceneEditor::Get()->CreateCrosspoint();
-
-            SceneEditor::Get()->SelectCrosspoint(cross);
-
-            return 0;
-        case MCMD_CREATE_WAYPOINT:
-            point = SceneEditor::Get()->CreateWaypoint();
-
-            SceneEditor::Get()->SelectWaypoint(point);
-
-            return 0;
-        case MCMD_CREATE_WEBNODE:
-            node = SceneEditor::Get()->CreateWebNode();
-
-            SceneEditor::Get()->SelectWebNode(node);
-            return 0;
-        case MCMD_CREATE_SCRIPT:
-            script = SceneEditor::Get()->CreateScript();
-
-            SceneEditor::Get()->SelectScript(script);
-            return 0;
-        case MCMD_WINDOW_SCENESETTINGS:
-            if(!SceneEditor::Get()->IsShowingSceneSettings()) { SceneEditor::Get()->ShowSceneSettings(); }
-            return 0;
-        case MCMD_WINDOW_COLLISIONSETTINGS:
-            if(!SceneEditor::Get()->IsShowingCollisionSettings()) { SceneEditor::Get()->ShowCollisionSettings(); }
-            return 0;
-        case MCMD_WINDOW_LMG:
-            if(!SceneEditor::Get()->IsShowingLightmapDialog()) { SceneEditor::Get()->ShowLightmapDialog(); }
-            return 0;
+    switch(cmd) {
+    case BCMD_FILE_SAVE:
+        if(IsOpened()) { Save(GetMissionPath()); }
+        break;
+    case MCMD_VIEW_WEBNODES: ToggleWebView(); break;
+    case MCMD_VIEW_ROADPOINTS: ToggleRoadView(); break;
+    case MCMD_VIEW_CITYPARTS: ToggleCityPartsView(); break;
+    case MCMD_VIEW_COLLISIONS: ToggleCollisionView(); break;
+    case MCMD_EDIT_COPY:
+        frame = GetSelectedFrame();
+        if(frame != nullptr) { CopySelection(); }
+        break;
+    case MCMD_EDIT_PASTE: PasteSelection(); break;
+    case MCMD_EDIT_DUPLICATE:
+        frame = GetSelectedFrame();
+        if(frame != nullptr) {
+            CopySelection();
+            PasteSelection();
         }
         break;
-
-    case WM_CLOSE: SendMessage(hwnd, WM_COMMAND, MCMD_FILE_CLOSE, 0); return 0;
-    case WM_DESTROY:
-        // NOTE: Restore original WndProc to avoid crashes
-        if(g_OriginalWndProc) {
-            SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)g_OriginalWndProc);
-            g_OriginalWndProc = NULL;
+    case MCMD_EDIT_DELETE: DeleteSelection(); break;
+    case MCMD_CREATE_DUMMY: CreateDummy(true); break;
+    case MCMD_CREATE_SOUND: {
+        path = SceneOpenFileDialog(FileDialog::Mode::OpenFile, "Select sound file", {{"Wave Sound File (*.wav)", "*.wav"}});
+        if(!path.empty()) { CreateSound(ProcessFileName(path, "wav"), true); }
+    } break;
+    case MCMD_CREATE_LIGHT: CreateLight(true); break;
+    case MCMD_CREATE_MODEL: {
+        path = SceneOpenFileDialog(FileDialog::Mode::OpenFile, "Select model file", {{"4DS Model File (*.4ds)", "*.4ds"}});
+        if(!path.empty()) { CreateModel(ProcessFileName(path, "i3d"), true); }
+    } break;
+    case MCMD_CREATE_PLAYER:
+    case MCMD_CREATE_HUMAN:
+    case MCMD_CREATE_CAR:
+    case MCMD_CREATE_DETECTOR:
+    case MCMD_CREATE_RAILWAY:
+    case MCMD_CREATE_PEDMAN:
+    case MCMD_CREATE_TRAFFICMAN:
+    case MCMD_CREATE_PHYSICAL: {
+        frame = GetSelectedFrame();
+        ActorType type = ACTOR_PLAYER;
+        switch(cmd) {
+        case MCMD_CREATE_PLAYER: type = ACTOR_PLAYER; break;
+        case MCMD_CREATE_HUMAN: type = ACTOR_ENEMY; break;
+        case MCMD_CREATE_CAR: type = ACTOR_CAR; break;
+        case MCMD_CREATE_DETECTOR: type = ACTOR_DETECTOR; break;
+        case MCMD_CREATE_RAILWAY: type = ACTOR_RAILWAY; break;
+        case MCMD_CREATE_PEDMAN: type = ACTOR_PEDESTRIANS; break;
+        case MCMD_CREATE_TRAFFICMAN: type = ACTOR_TRAFFIC; break;
+        case MCMD_CREATE_PHYSICAL: type = ACTOR_PHYSICAL; break;
         }
+        if(frame) {
+            if(GetActor(frame) == nullptr) {
+                CreateActor(type, frame);
+            } else {
+                ShowPopupMessage("The frame already has an actor!");
+            }
+        } else {
+            ShowPopupMessage("Cannot create an actor without a frame!");
+        }
+    } break;
+    case MCMD_CREATE_CROSSPOINT:
+        cross = CreateCrosspoint();
+        SelectCrosspoint(cross);
+        break;
+    case MCMD_CREATE_WAYPOINT:
+        point = CreateWaypoint();
+        SelectWaypoint(point);
+        break;
+    case MCMD_CREATE_WEBNODE:
+        node = CreateWebNode();
+        SelectWebNode(node);
+        break;
+    case MCMD_CREATE_SCRIPT:
+        script = CreateScript();
+        SelectScript(script);
+        break;
+    case MCMD_WINDOW_SCENESETTINGS:
+        if(!IsShowingSceneSettings()) { ShowSceneSettings(); }
+        break;
+    case MCMD_WINDOW_COLLISIONSETTINGS:
+        if(!IsShowingCollisionSettings()) { ShowCollisionSettings(); }
+        break;
+    case MCMD_WINDOW_LMG:
+        if(!IsShowingLightmapDialog()) { ShowLightmapDialog(); }
+        break;
+
+    // Differences menu
+    case MCMD_DIFF_OPEN: {
+        std::string diffPath = SceneOpenFileDialog(FileDialog::Mode::OpenFile, "Open differences file", {{"Differences File (*.chg)", "*.chg"}});
+        if(!diffPath.empty()) { LoadDiffFile(diffPath); }
+    } break;
+    case MCMD_DIFF_SAVE:
+        if(m_DiffLoaded && !m_DiffFilePath.empty()) { SaveDiffFile(m_DiffFilePath); }
+        break;
+    case MCMD_DIFF_SAVE_AS: {
+        std::string diffPath = SceneOpenFileDialog(FileDialog::Mode::SaveFile, "Save differences file", {{"Differences File (*.chg)", "*.chg"}});
+        if(!diffPath.empty()) { SaveDiffFile(diffPath); }
+    } break;
+    case MCMD_DIFF_CLOSE:
+        CloseDiffFile();
+        break;
+    case MCMD_DIFF_NEW_FRAME:
+        if(m_DiffLoaded) { AddDiffFrameDefinition(CHG_FT_DUMMY); }
         break;
     }
-
-    ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
-
-    return CallWindowProc(g_OriginalWndProc, hwnd, msg, wParam, lParam);
 }
 
 std::vector<I3D_frame*> IterateChildFrames(I3D_frame* frame) {
@@ -552,59 +446,6 @@ void SceneEditor::UpdateHierarchyAfterDragDrop(I3D_frame* draggedFrame, I3D_fram
     }
 }
 
-HMODULE ls3df = nullptr;
-
-void InvalidateImGuiResources() {
-    ImGui::SetCurrentContext(SceneEditor::Get()->GetImGuiContext());
-
-    ImGui_ImplDX8_InvalidateDeviceObjects();
-}
-
-void CreateImGuiResources() {
-    ImGui::SetCurrentContext(SceneEditor::Get()->GetImGuiContext());
-
-    ImGui_ImplDX8_CreateDeviceObjects();
-}
-
-typedef int(__cdecl* dbgPrintf_t)(const char* fmt, ...);
-dbgPrintf_t dbgPrintf_orig = nullptr;
-
-int dbgPrintf_Hook(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    char buf[512];
-    vsprintf(buf, fmt, args);
-    va_end(args);
-
-    char buf2[512];
-    sprintf(buf2, "%s\n", buf);
-    OutputDebugStringA(buf2);
-
-    return dbgPrintf_orig(buf);
-}
-
-__declspec(naked) void ResetDevice_Before() {
-    static DWORD address = (int)ls3df + 0x6D5EE;
-
-    __asm {
-		call InvalidateImGuiResources
-		mov eax, address
-		jmp eax
-    }
-}
-
-__declspec(naked) void ResetDevice_After() {
-    static DWORD address = (int)ls3df + 0x6D62C;
-
-    *(bool*)((int)ls3df + 0xC59B3) = false; // g_SceneBegun = false
-
-    __asm {
-		call CreateImGuiResources
-		mov eax, address
-		jmp eax
-    }
-}
-
 DWORD ToARGB(float r, float g, float b, float a) {
     uint8_t a_byte = static_cast<uint8_t>(a * 255.0f > 255.0f ? 255 : a * 255.0f);
     uint8_t r_byte = static_cast<uint8_t>(r * 255.0f > 255.0f ? 255 : r * 255.0f);
@@ -711,93 +552,20 @@ LS3D_RESULT DrawSolidBox(
     }
 }
 
-void SceneEditor::DrawProgress(const std::string& title) {
-    m_IGraph->ResetRenderProps();
-    m_IGraph->Clear(0xFF000000, 1.0, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER);
-    //DrawSolidBox(0, 0, m_IGraph->Scrn_sx(), m_IGraph->Scrn_sy(), 0, 0, 0);
-    m_3DDriver->DrawText2D((m_IGraph->Scrn_sx() / 2) - ((title.length() / 2) * 16), (m_IGraph->Scrn_sy() / 2) - 8, title.c_str(), 0, 1.0f);
-    m_IGraph->Present();
-}
+// CalculateHorizontalFOV and CalculateCameraFOV are in BaseEditor.cpp
+extern float CalculateHorizontalFOV(float aspectRatio);
+extern float CalculateCameraFOV(float horizontalFOV, float aspectRatio);
 
-float CalculateHorizontalFOV(float aspectRatio) {
-    // Data points: (aspect ratio, horizontal FOV in degrees)
-    const float points[][2] = {
-        {1.0f, 80.0f}, // 1:1
-        {1.25f, 86.0f}, // 5:4
-        {1.333f, 90.0f}, // 4:3
-        {1.6f, 108.0f}, // 16:10
-        {1.777f, 115.0f}, // 16:9
-        {2.370f, 135.0f}, // 21:9
-        {3.556f, 150.0f} // 32:9
-    };
-    const int numPoints = sizeof(points) / sizeof(points[0]);
-
-    // If aspect ratio is below the minimum, return 80 degrees
-    if(aspectRatio <= points[0][0]) { return RAD(80.0f); }
-
-    // If aspect ratio is above the maximum, return 150 degrees
-    if(aspectRatio >= points[numPoints - 1][0]) { return RAD(150.0f); }
-
-    // Find the two points to interpolate between
-    for(int i = 0; i < numPoints - 1; ++i) {
-        if(aspectRatio >= points[i][0] && aspectRatio <= points[i + 1][0]) {
-            float x1 = points[i][0], y1 = points[i][1];
-            float x2 = points[i + 1][0], y2 = points[i + 1][1];
-
-            // Linear interpolation: y = y1 + (y2 - y1)/(x2 - x1) * (x - x1)
-            return RAD((y1 + (y2 - y1) / (x2 - x1) * (aspectRatio - x1)));
-        }
-    }
-
-    // Fallback (should not reach here due to above checks)
-    return RAD(90.0f);
-}
-
-float CalculateCameraFOV(float horizontalFOV, float aspectRatio) { return 2.0f * atanf(tanf(horizontalFOV / 2.0f) / aspectRatio); }
-
-INT64 g_QPCFreq;
-
-INT32 g_FrameCount = 0;
-INT64 g_FrameStart = 0, g_FrameEnd = 0;
-INT64 g_AverageFPS = 0, g_TicksAccum = 0;
-
-INT64 g_ElapsedTime, g_OverSleepDuration = 0;
-const INT64 TARGET_FRAME_TIME = (1000000 / TARGET_FPS_CAP) + 1;
-
-INT64 __forceinline ElapsedMicroseconds(INT64 startCount, INT64 endCount) {
-    INT64 elapsedMicroseconds = endCount - startCount;
-    elapsedMicroseconds *= 1000000;
-    elapsedMicroseconds /= g_QPCFreq;
-    return elapsedMicroseconds;
-}
-
-bool SceneEditor::Init() {
-    MH_CreateHook((LPVOID)&dbgPrintf, (LPVOID)&dbgPrintf_Hook, (LPVOID*)&dbgPrintf_orig);
-    MH_EnableHook(MH_ALL_HOOKS);
-
-    m_IGraph = GetIGraph();
-    m_3DDriver = I3DGetDriver();
-    m_SoundDriver = ISndGetDriver();
-
-    EditorSettings* settings = g_Editor->GetSettings();
-
-    m_MenuBar = CreateMenu();
-
-    m_FileMenu = CreatePopupMenu();
+// OnMenuSetup: creates View, Edit, Create, Window, Help menus
+void SceneEditor::OnMenuSetup() {
     m_ViewMenu = CreatePopupMenu();
     m_EditMenu = CreatePopupMenu();
     m_CreateMenu = CreatePopupMenu();
     m_CreateFrameMenu = CreatePopupMenu();
     m_CreateActorMenu = CreatePopupMenu();
+    m_CreateRoadMenu = CreatePopupMenu();
     m_WindowMenu = CreatePopupMenu();
     m_HelpMenu = CreatePopupMenu();
-
-    // File menu
-    AppendMenu(m_FileMenu, MF_STRING, MCMD_FILE_OPEN, "Open\tCtrl+O");
-    AppendMenu(m_FileMenu, MF_STRING, MCMD_FILE_SAVE, "Save\tCtrl+S");
-    EnableMenuItem(m_FileMenu, MCMD_FILE_SAVE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
-    AppendMenu(m_FileMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenu(m_FileMenu, MF_STRING, MCMD_FILE_CLOSE, "Exit\tAlt+F4");
 
     // View menu
     AppendMenu(m_ViewMenu, MF_STRING, MCMD_VIEW_WEBNODES, "Web Nodes\tCtrl+1");
@@ -854,479 +622,81 @@ bool SceneEditor::Init() {
     // Help menu
     AppendMenu(m_HelpMenu, MF_STRING, MCMD_HELP_ABOUT, "About mEdit");
 
-    // Main menu bar
-    AppendMenu(m_MenuBar, MF_POPUP, (UINT_PTR)m_FileMenu, "File");
+    // Differences menu
+    m_DiffMenu = CreatePopupMenu();
+    AppendMenu(m_DiffMenu, MF_STRING, MCMD_DIFF_OPEN, "Open .chg");
+    AppendMenu(m_DiffMenu, MF_STRING | MF_GRAYED, MCMD_DIFF_SAVE, "Save");
+    AppendMenu(m_DiffMenu, MF_STRING | MF_GRAYED, MCMD_DIFF_SAVE_AS, "Save As...");
+    AppendMenu(m_DiffMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenu(m_DiffMenu, MF_STRING | MF_GRAYED, MCMD_DIFF_CLOSE, "Close");
+    AppendMenu(m_DiffMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenu(m_DiffMenu, MF_STRING | MF_GRAYED, MCMD_DIFF_NEW_FRAME, "Add Frame Entry");
+
+    // Append to menu bar (File is already added by BaseEditor)
     AppendMenu(m_MenuBar, MF_POPUP, (UINT_PTR)m_ViewMenu, "View");
     AppendMenu(m_MenuBar, MF_POPUP, (UINT_PTR)m_EditMenu, "Edit");
     AppendMenu(m_MenuBar, MF_POPUP, (UINT_PTR)m_CreateMenu, "Create");
     AppendMenu(m_MenuBar, MF_POPUP, (UINT_PTR)m_WindowMenu, "Window");
+    AppendMenu(m_MenuBar, MF_POPUP, (UINT_PTR)m_DiffMenu, "Differences");
     AppendMenu(m_MenuBar, MF_POPUP, (UINT_PTR)m_HelpMenu, "Help");
-
-    IGRAPH_INIT_DESC initDesc;
-    ZeroMemory(&initDesc, sizeof(IGRAPH_INIT_DESC));
-
-    initDesc.Instance = GetModuleHandleA(NULL);
-    initDesc.BPP = 32;
-    initDesc.X = 60;
-    initDesc.Y = 60;
-    initDesc.CurrentAdapter = settings->video.currentAdapter;
-    initDesc.Width = initDesc.Rc.right = settings->video.width;
-    initDesc.Height = initDesc.Rc.bottom = settings->video.height;
-    initDesc.RefreshRate = settings->video.refreshRate;
-    if(settings->video.fullscreen) {
-        initDesc.Flags |= INITFLAG_FULLSCREEN;
-    } else {
-        initDesc.Menu = m_MenuBar;
-    }
-    if(settings->video.vsync) { initDesc.Flags |= INITFLAG_VSYNC; }
-
-    IDirect3D8* d3d = Direct3DCreate8(D3D_SDK_VERSION);
-    D3DDISPLAYMODE currentMode;
-    HRESULT hr = d3d->GetAdapterDisplayMode(initDesc.CurrentAdapter, &currentMode);
-    if(SUCCEEDED(hr)) {
-        initDesc.X = (currentMode.Width / 2) - (initDesc.Width / 2);
-        initDesc.Y = (currentMode.Height / 2) - (initDesc.Height / 2);
-    }
-    d3d->Release();
-
-    LS3D_RESULT res = m_IGraph->Init(&initDesc);
-
-    if(I3D_SUCCESS(res)) {
-        g_OriginalWndProc = (WNDPROC)SetWindowLongPtr(m_IGraph->GetMainHWND(), GWLP_WNDPROC, (LONG_PTR)EditorWndProc);
-        g_OriginalChildWndProc = (WNDPROC)SetWindowLongPtr(m_IGraph->GetChildHWND(), GWLP_WNDPROC, (LONG_PTR)EditorChildWndProc);
-
-        std::vector<unsigned char> imageData;
-
-        HICON iconBig = CreateIconFromPNG("mEdit\\Images\\Icons\\SceneEditor.png", 128, 128);
-        HICON icon = CreateIconFromPNG("mEdit\\Images\\Icons\\SceneEditor.png", 32, 32);
-
-        SendMessage(m_IGraph->GetMainHWND(), WM_SETICON, ICON_SMALL, (LPARAM)icon);
-        SendMessage(m_IGraph->GetMainHWND(), WM_SETICON, ICON_BIG, (LPARAM)iconBig);
-
-        m_IGraph->SetAppName("Scene Editor");
-        m_IGraph->ResetRenderProps();
-
-        m_IGraph->Clear(0x3F800000, 1.0, 0);
-        m_IGraph->Present();
-
-        res = m_3DDriver->Init(0);
-
-        if(I3D_SUCCESS(res)) {
-            m_3DDriver->SetState(RS_ENVMAPPING, 1);
-            m_3DDriver->SetState(RS_USESHADOWS, 1);
-            m_3DDriver->SetState(RS_FOG, 1);
-            m_3DDriver->SetState(RS_DEBUG_INT4, 8);
-            m_3DDriver->SetState(RS_DEBUG_INT5, 8);
-            m_3DDriver->SetState(RS_DRAW_COL_TESTS, 1);
-            m_3DDriver->SetState(RS_SOUND_VOLUME, 0);
-            m_3DDriver->SetState(RS_PROFILER_MODE, 0);
-            m_3DDriver->SetState(RS_LOD_INDEX, 0);
-            m_3DDriver->SetState(RS_ANISO_FILTERING, 1);
-            m_3DDriver->SetState(RS_USE_OCCLUSION, 0);
-            m_3DDriver->SetState(RS_TEXTUREDITHER, 0);
-            m_3DDriver->SetState(RS_DRAWTEXTURES, 1);
-        }
-
-        ISND_INIT sndInit;
-
-        sndInit.hWindow = m_IGraph->GetMainHWND();
-        sndInit.uBps = 24;
-        sndInit.uNumChan = 2;
-        sndInit.uMixFreq = 44100;
-
-        m_SoundDriver->Init(&sndInit);
-
-        m_IGraph->AddMapsDir("Maps", false);
-
-        m_IGraph->MouseInit(0);
-
-        ls3df = GetModuleHandleA("LS3DF.dll");
-
-        if(ls3df) {
-            m_D3DDevice = *(IDirect3DDevice8**)((int)ls3df + 0x1C597C);
-            m_LS3DMouseDevice = *(IDirectInputDevice8A**)((int)ls3df + 0x1C595C);
-        } else {
-            m_D3DDevice = *(IDirect3DDevice8**)(0x101C597C);
-            m_LS3DMouseDevice = *(IDirectInputDevice8A**)(0x101C595C);
-        }
-
-        m_Camera = (I3D_camera*)m_3DDriver->CreateFrame(FRAME_CAMERA);
-
-        m_LastFrameTime = std::chrono::steady_clock::now();
-        m_DeltaTime = 0.0f;
-
-        m_Camera->SetName("EditorCamera");
-        float aspectRatio = float(settings->video.width) / settings->video.height;
-        m_Camera->SetAspectRatio(aspectRatio);
-
-        float horizontalFOV = CalculateHorizontalFOV(aspectRatio);
-        float camFOV = CalculateCameraFOV(horizontalFOV, aspectRatio);
-
-        m_Camera->SetFOV(camFOV);
-        //m_Camera->SetNearFOV(RAD(115));
-        m_Camera->SetRange(0.01f, 8000.0f);
-
-        m_ImGuiContext = ImGui::CreateContext();
-        ImGui::SetCurrentContext(m_ImGuiContext);
-
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        io.IniFilename = "mEdit\\guisettings.ini";
-
-        m_IGraph->CreateITexture("mEdit\\Images\\Editor\\frame_light.bmp", "mEdit\\Images\\Editor\\frame_light+.bmp", 4, &m_LightIconTexture);
-        m_IGraph->CreateITexture("mEdit\\Images\\Editor\\frame_sound.bmp", "mEdit\\Images\\Editor\\frame_sound+.bmp", 4, &m_SoundIconTexture);
-        m_IGraph->CreateITexture("mEdit\\Images\\Editor\\frame_camera.bmp", "mEdit\\Images\\Editor\\frame_camera+.bmp", 4, &m_CameraIconTexture);
-        m_IGraph->CreateITexture("mEdit\\Images\\Editor\\actor_detector.bmp", "mEdit\\Images\\Editor\\actor_detector+.bmp", 4, &m_DetectorIconTexture);
-        m_IGraph->CreateITexture("mEdit\\Images\\Editor\\actor_traffic.bmp", "mEdit\\Images\\Editor\\actor_traffic+.bmp", 4, &m_TrafficIconTexture);
-        m_IGraph->CreateITexture("mEdit\\Images\\Editor\\actor_peds.bmp", "mEdit\\Images\\Editor\\actor_peds+.bmp", 4, &m_PedsIconTexture);
-
-        m_LightIconMaterial = m_3DDriver->CreateMaterial();
-        if(m_LightIconMaterial) {
-            m_LightIconMaterial->SetTexture(m_LightIconTexture);
-            m_LightIconMaterial->SetAmbient({1, 1, 1});
-            m_LightIconMaterial->SetDiffuse({1, 1, 1});
-            m_LightIconMaterial->SetEmissive({0, 0, 0});
-        }
-
-        m_SoundIconMaterial = m_3DDriver->CreateMaterial();
-        if(m_SoundIconMaterial) {
-            m_SoundIconMaterial->SetTexture(m_SoundIconTexture);
-            m_SoundIconMaterial->SetAmbient({1, 1, 1});
-            m_SoundIconMaterial->SetDiffuse({1, 1, 1});
-            m_SoundIconMaterial->SetEmissive({0, 0, 0});
-        }
-
-        m_CameraIconMaterial = m_3DDriver->CreateMaterial();
-        if(m_CameraIconMaterial) {
-            m_CameraIconMaterial->SetTexture(m_CameraIconTexture);
-            m_CameraIconMaterial->SetAmbient({1, 1, 1});
-            m_CameraIconMaterial->SetDiffuse({1, 1, 1});
-            m_CameraIconMaterial->SetEmissive({0, 0, 0});
-        }
-
-        m_DetectorIconMaterial = m_3DDriver->CreateMaterial();
-        if(m_DetectorIconMaterial) {
-            m_DetectorIconMaterial->SetTexture(m_DetectorIconTexture);
-            m_DetectorIconMaterial->SetAmbient({1, 1, 1});
-            m_DetectorIconMaterial->SetDiffuse({1, 1, 1});
-            m_DetectorIconMaterial->SetEmissive({0, 0, 0});
-        }
-
-        m_TrafficIconMaterial = m_3DDriver->CreateMaterial();
-        if(m_TrafficIconMaterial) {
-            m_TrafficIconMaterial->SetTexture(m_TrafficIconTexture);
-            m_TrafficIconMaterial->SetAmbient({1, 1, 1});
-            m_TrafficIconMaterial->SetDiffuse({1, 1, 1});
-            m_TrafficIconMaterial->SetEmissive({0, 0, 0});
-        }
-
-        m_PedsIconMaterial = m_3DDriver->CreateMaterial();
-        if(m_PedsIconMaterial) {
-            m_PedsIconMaterial->SetTexture(m_PedsIconTexture);
-            m_PedsIconMaterial->SetAmbient({1, 1, 1});
-            m_PedsIconMaterial->SetDiffuse({1, 1, 1});
-            m_PedsIconMaterial->SetEmissive({0, 0, 0});
-        }
-
-        QueryPerformanceFrequency((LARGE_INTEGER*)&g_QPCFreq);
-
-        QueryPerformanceCounter((LARGE_INTEGER*)&g_FrameStart);
-
-        SetupImGui();
-
-        InstallJmpHook((int)ls3df + 0x6D5E4, (DWORD)&ResetDevice_Before); // NOTE: Required to release ImGui resources before resetting device
-        InstallJmpHook((int)ls3df + 0x6D603, (DWORD)&ResetDevice_After); // NOTE: Required to re-init ImGui resources after resetting device
-
-        InstallJmpHook((int)ls3df + 0x57DD4, (int)ls3df + 0x57E74); // NOTE: Always apply SetRange - no difference check
-
-        InstallJmpHook((int)ls3df + 0x5FB65,
-                       (int)ls3df + 0x5FBA1); // NOTE: Don't delete bitmaps while loading lightmaps (might leak data, but I FUCKING NEED IT)
-
-        ImGui_ImplWin32_Init(m_IGraph->GetMainHWND());
-        ImGui_ImplDX8_Init(m_D3DDevice);
-
-        return true;
-    }
-
-    return false;
 }
 
-bool SceneEditor::IsInit() const { return m_IGraph->IsInit(); }
+void SceneEditor::OnDockLayout(ImGuiID dockspace_id) {
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImVec2 vpSize = ImGui::GetMainViewport()->Size;
+    ImGui::DockBuilderSetNodeSize(dockspace_id, vpSize);
 
-#define LINE_FVF (D3DFVF_XYZ | D3DFVF_DIFFUSE)
+    ImGuiID dock_left, dock_center;
+    ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.20f, &dock_left, &dock_center);
 
-void SceneEditor::DrawBatchedLines(const std::vector<LineVertex>& vertices, const std::vector<WORD>& indices, const S_vector& color, uint8_t alpha) {
-    if(vertices.empty()) return;
+    ImGuiID dock_right;
+    ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Right, 0.25f, &dock_right, &dock_center);
 
-    bool useIndexing = !indices.empty();
-    if(useIndexing && indices.size() % 2 != 0) return; // Indices must be even for lines
+    ImGuiID dock_bottom;
+    ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.25f, &dock_bottom, &dock_center);
 
-    float calcAplha = (double)(255 - (unsigned int)alpha) * 0.0039215689;
-    float a = calcAplha * 255.0;
-    float r = color.x * 255.0;
-    float g = color.y * 255.0;
-    float b = color.z * 255.0;
-    uint32_t d3dColor = (int)b | (((int)g | (((int)r | ((int)a << 8)) << 8)) << 8);
+    // Split left panel: Collection (top 60%), Differences (bottom 40%)
+    ImGuiID dock_left_top, dock_left_bottom;
+    ImGui::DockBuilderSplitNode(dock_left, ImGuiDir_Down, 0.40f, &dock_left_bottom, &dock_left_top);
 
-    // Apply default color if needed (or per-vertex colors could override)
-    std::vector<LineVertex> coloredVerts = vertices;
-    for(auto& v: coloredVerts) {
-        if(v.color == 0) v.color = d3dColor;
-    }
+    ImGui::DockBuilderDockWindow("Collection", dock_left_top);
+    ImGui::DockBuilderDockWindow("Differences", dock_left_bottom);
+    ImGui::DockBuilderDockWindow("Viewport", dock_center);
+    ImGui::DockBuilderDockWindow("Inspector", dock_right);
+    ImGui::DockBuilderDockWindow("Log", dock_bottom);
 
-    // Create vertex buffer
-    IDirect3DVertexBuffer8* pVB = nullptr;
-    UINT vbSize = static_cast<UINT>(coloredVerts.size() * sizeof(LineVertex));
-    m_D3DDevice->CreateVertexBuffer(vbSize, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, LINE_FVF, D3DPOOL_DEFAULT, &pVB);
-    if(!pVB) return;
-
-    // Fill VB
-    void* pVBData = nullptr;
-    pVB->Lock(0, 0, (BYTE**)&pVBData, D3DLOCK_DISCARD);
-    memcpy(pVBData, coloredVerts.data(), vbSize);
-    pVB->Unlock();
-
-    // Optional index buffer
-    IDirect3DIndexBuffer8* pIB = nullptr;
-    if(useIndexing) {
-        UINT ibSize = static_cast<UINT>(indices.size() * sizeof(WORD));
-        m_D3DDevice->CreateIndexBuffer(ibSize, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &pIB);
-        if(pIB) {
-            void* pIBData = nullptr;
-            pIB->Lock(0, 0, (BYTE**)&pIBData, D3DLOCK_DISCARD);
-            memcpy(pIBData, indices.data(), ibSize);
-            pIB->Unlock();
-            m_D3DDevice->SetIndices(pIB, 0);
-        }
-    }
-
-    // Set up rendering
-    m_D3DDevice->SetTextureStageState(0, D3DTSS_COLOROP, 4);
-    m_D3DDevice->SetTextureStageState(0, D3DTSS_ALPHAOP, 4);
-    m_D3DDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-    m_D3DDevice->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
-    m_D3DDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-    m_D3DDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-    m_D3DDevice->SetRenderState(D3DRS_ALPHAREF, TRUE);
-    m_D3DDevice->SetRenderState(D3DRS_LIGHTING, FALSE);
-    m_D3DDevice->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
-    //m_D3DDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
-    m_D3DDevice->SetTexture(0, nullptr);
-    m_D3DDevice->SetStreamSource(0, pVB, sizeof(LineVertex));
-    m_D3DDevice->SetVertexShader(LINE_FVF);
-
-    // Draw
-    UINT numPrimitives = useIndexing ? static_cast<UINT>(indices.size() / 2) : static_cast<UINT>(coloredVerts.size() / 2);
-    if(useIndexing && pIB) {
-        m_D3DDevice->DrawIndexedPrimitive(D3DPT_LINELIST, 0, static_cast<UINT>(coloredVerts.size()), 0, numPrimitives);
-    } else {
-        m_D3DDevice->DrawPrimitive(D3DPT_LINELIST, 0, numPrimitives);
-    }
-
-    // Cleanup
-    pVB->Release();
-    if(pIB) pIB->Release();
+    ImGui::DockBuilderFinish(dockspace_id);
 }
 
-void SceneEditor::DrawWireframeBox(const I3D_bbox& bbox, const S_vector& color, uint8_t alpha) {
-    // Define the 8 vertices of the box
-    S_vector pos[8] = {
-        {bbox.min.x, bbox.min.y, bbox.min.z}, // 0: min min min
-        {bbox.max.x, bbox.min.y, bbox.min.z}, // 1: max min min
-        {bbox.max.x, bbox.min.y, bbox.max.z}, // 2: max min max
-        {bbox.min.x, bbox.min.y, bbox.max.z}, // 3: min min max
-        {bbox.min.x, bbox.max.y, bbox.min.z}, // 4: min max min
-        {bbox.max.x, bbox.max.y, bbox.min.z}, // 5: max max min
-        {bbox.max.x, bbox.max.y, bbox.max.z}, // 6: max max max
-        {bbox.min.x, bbox.max.y, bbox.max.z} // 7: min max max
+void SceneEditor::OnSceneLoaded() {
+    // Icon textures
+    m_IGraph->CreateITexture("mEdit\\Images\\Editor\\frame_light.bmp", "mEdit\\Images\\Editor\\frame_light+.bmp", 4, &m_LightIconTexture);
+    m_IGraph->CreateITexture("mEdit\\Images\\Editor\\frame_sound.bmp", "mEdit\\Images\\Editor\\frame_sound+.bmp", 4, &m_SoundIconTexture);
+    m_IGraph->CreateITexture("mEdit\\Images\\Editor\\frame_camera.bmp", "mEdit\\Images\\Editor\\frame_camera+.bmp", 4, &m_CameraIconTexture);
+    m_IGraph->CreateITexture("mEdit\\Images\\Editor\\actor_detector.bmp", "mEdit\\Images\\Editor\\actor_detector+.bmp", 4, &m_DetectorIconTexture);
+    m_IGraph->CreateITexture("mEdit\\Images\\Editor\\actor_traffic.bmp", "mEdit\\Images\\Editor\\actor_traffic+.bmp", 4, &m_TrafficIconTexture);
+    m_IGraph->CreateITexture("mEdit\\Images\\Editor\\actor_peds.bmp", "mEdit\\Images\\Editor\\actor_peds+.bmp", 4, &m_PedsIconTexture);
+
+    auto createMat = [&](ITexture* tex) -> I3D_material* {
+        I3D_material* mat = m_3DDriver->CreateMaterial();
+        if(mat) {
+            mat->SetTexture(tex);
+            mat->SetAmbient({1, 1, 1});
+            mat->SetDiffuse({1, 1, 1});
+            mat->SetEmissive({0, 0, 0});
+        }
+        return mat;
     };
 
-    std::vector<LineVertex> vertices(8);
-    for(int i = 0; i < 8; ++i) {
-        vertices[i] = {pos[i].x, pos[i].y, pos[i].z, 0};
-    }
-
-    // Indices for the 12 lines
-    std::vector<WORD> indices = {
-        0, 1, 1, 2, 2, 3, 3, 0, // Bottom face
-        4, 5, 5, 6, 6, 7, 7, 4, // Top face
-        0, 4, 1, 5, 2, 6, 3, 7 // Vertical edges
-    };
-
-    DrawBatchedLines(vertices, indices, color, alpha);
+    m_LightIconMaterial = createMat(m_LightIconTexture);
+    m_SoundIconMaterial = createMat(m_SoundIconTexture);
+    m_CameraIconMaterial = createMat(m_CameraIconTexture);
+    m_DetectorIconMaterial = createMat(m_DetectorIconTexture);
+    m_TrafficIconMaterial = createMat(m_TrafficIconTexture);
+    m_PedsIconMaterial = createMat(m_PedsIconTexture);
 }
 
-void SceneEditor::DrawWireframeCone(const S_vector& pos, const S_vector& dir, float radius, float height, const S_vector& color, uint8_t alpha, int segments) {
-    // Generate vertices: one for apex, 'segments' for the base
-    std::vector<S_vector> posVerts(segments + 1);
-
-    S_vector position = pos;
-
-    // Normalize direction vector
-    S_vector nDir;
-    nDir.SetNormalized(dir);
-
-    // Apex at position
-    posVerts[0] = position;
-
-    // Base center at position + height * nDir
-    S_vector baseCenter = position + nDir * height;
-
-    // Find two perpendicular vectors to form the base plane
-    S_vector up = (fabs(nDir.y) < 0.9f) ? S_vector(0.0f, 1.0f, 0.0f) : S_vector(1.0f, 0.0f, 0.0f); // Avoid near-parallel case
-    S_vector u;
-    u.SetNormalized(nDir.Cross(up)); // First basis vector
-    S_vector v;
-    v.SetNormalized(nDir.Cross(u)); // Second basis vector, perpendicular to nDir and u
-
-    // Base vertices in the plane perpendicular to nDir at position
-    for(int i = 0; i < segments; ++i) {
-        float theta = 2.0f * PI * static_cast<float>(i) / segments;
-        float cosTheta = cosf(theta);
-        float sinTheta = sinf(theta);
-        // Base vertex = baseCenter + radius * (cos(θ) * u + sin(θ) * v)
-        posVerts[i + 1] = baseCenter + (u * (radius * cosTheta) + v * (radius * sinTheta));
-    }
-
-    std::vector<LineVertex> vertices(segments + 1);
-    for(int i = 0; i <= segments; ++i) {
-        vertices[i] = {posVerts[i].x, posVerts[i].y, posVerts[i].z, 0};
-    }
-
-    // Indices for base circle and lines to apex
-    std::vector<WORD> indices;
-    indices.reserve(segments * 4); // segments for base + segments for sides, each 2 indices
-
-    // Base circle
-    for(int i = 0; i < segments; ++i) {
-        indices.push_back(static_cast<WORD>(1 + i));
-        indices.push_back(static_cast<WORD>(1 + (i + 1) % segments));
-    }
-
-    // Lines from base to apex
-    for(int i = 0; i < segments; ++i) {
-        indices.push_back(static_cast<WORD>(1 + i));
-        indices.push_back(0);
-    }
-
-    DrawBatchedLines(vertices, indices, color, alpha);
-}
-
-void SceneEditor::DrawWireframeCylinder(const S_vector& basePos, float radius, float height, const S_vector& color, uint32_t alpha, int segments) {
-    if(m_3DDriver == nullptr || segments < 3 || radius <= 0.0f || height <= 0.0f) {
-        return; // Basic validation
-    }
-
-    std::vector<S_vector> posVerts(2 * segments);
-
-    // Generate bottom circle points
-    for(int i = 0; i < segments; ++i) {
-        float theta = 2.0f * PI * static_cast<float>(i) / static_cast<float>(segments);
-        float cx = radius * cosf(theta);
-        float cy = radius * sinf(theta);
-        posVerts[i] = {basePos.x + cx, basePos.y, basePos.z + cy};
-    }
-
-    // Generate top circle points
-    for(int i = 0; i < segments; ++i) {
-        float theta = 2.0f * PI * static_cast<float>(i) / static_cast<float>(segments);
-        float cx = radius * cosf(theta);
-        float cy = radius * sinf(theta);
-        posVerts[segments + i] = {basePos.x + cx, basePos.y + height, basePos.z + cy};
-    }
-
-    std::vector<LineVertex> vertices(2 * segments);
-    for(int i = 0; i < 2 * segments; ++i) {
-        vertices[i] = {posVerts[i].x, posVerts[i].y, posVerts[i].z, 0};
-    }
-
-    // Indices for bottom circle, top circle, and verticals
-    std::vector<WORD> indices;
-    indices.reserve(6 * segments); // 3 loops * 2 indices per line
-
-    // Bottom circle
-    for(int i = 0; i < segments; ++i) {
-        indices.push_back(static_cast<WORD>(i));
-        indices.push_back(static_cast<WORD>((i + 1) % segments));
-    }
-
-    // Top circle
-    for(int i = 0; i < segments; ++i) {
-        indices.push_back(static_cast<WORD>(segments + i));
-        indices.push_back(static_cast<WORD>(segments + (i + 1) % segments));
-    }
-
-    // Vertical lines
-    for(int i = 0; i < segments; ++i) {
-        indices.push_back(static_cast<WORD>(i));
-        indices.push_back(static_cast<WORD>(segments + i));
-    }
-
-    DrawBatchedLines(vertices, indices, color, static_cast<uint8_t>(alpha));
-}
-
-void SceneEditor::DrawWireframeFrustum(const S_vector& pos,
-                                       const S_vector& dir,
-                                       float widthTop,
-                                       float heightTop,
-                                       float widthBottom,
-                                       float heightBottom,
-                                       float height,
-                                       const S_vector& color,
-                                       uint8_t alpha) {
-    // Generate vertices: 4 for top base, 4 for bottom base
-    std::vector<S_vector> posVerts(8);
-
-    S_vector position = pos;
-
-    // Normalize direction vector
-    S_vector nDir;
-    nDir.SetNormalized(dir);
-
-    // Top base center at position
-    S_vector topCenter = position;
-    // Bottom base center at position + height * nDir
-    S_vector bottomCenter = position + nDir * height;
-
-    // Find two perpendicular vectors to form the base planes
-    S_vector up = (fabs(nDir.y) < 0.9f) ? S_vector(0.0f, 1.0f, 0.0f) : S_vector(1.0f, 0.0f, 0.0f); // Avoid near-parallel case
-    S_vector u;
-    u.SetNormalized(nDir.Cross(up)); // First basis vector (width direction)
-    S_vector v;
-    v.SetNormalized(nDir.Cross(u)); // Second basis vector (height direction)
-
-    // Generate vertices for top base (rectangle, indices 0 to 3)
-    float halfWidthTop = widthTop * 0.5f;
-    float halfHeightTop = heightTop * 0.5f;
-    posVerts[0] = topCenter + (u * halfWidthTop) + (v * halfHeightTop); // Top-right
-    posVerts[1] = topCenter + (u * halfWidthTop) - (v * halfHeightTop); // Bottom-right
-    posVerts[2] = topCenter - (u * halfWidthTop) - (v * halfHeightTop); // Bottom-left
-    posVerts[3] = topCenter - (u * halfWidthTop) + (v * halfHeightTop); // Top-left
-
-    // Generate vertices for bottom base (rectangle, indices 4 to 7)
-    float halfWidthBottom = widthBottom * 0.5f;
-    float halfHeightBottom = heightBottom * 0.5f;
-    posVerts[4] = bottomCenter + (u * halfWidthBottom) + (v * halfHeightBottom); // Top-right
-    posVerts[5] = bottomCenter + (u * halfWidthBottom) - (v * halfHeightBottom); // Bottom-right
-    posVerts[6] = bottomCenter - (u * halfWidthBottom) - (v * halfHeightBottom); // Bottom-left
-    posVerts[7] = bottomCenter - (u * halfWidthBottom) + (v * halfHeightBottom); // Top-left
-
-    std::vector<LineVertex> vertices(8);
-    for(int i = 0; i < 8; ++i) {
-        vertices[i] = {posVerts[i].x, posVerts[i].y, posVerts[i].z, 0};
-    }
-
-    // Indices for top base, bottom base, and sides
-    std::vector<WORD> indices = {
-        0, 1, 1, 2, 2, 3, 3, 0, // Top base
-        4, 5, 5, 6, 6, 7, 7, 4, // Bottom base
-        0, 4, 1, 5, 2, 6, 3, 7 // Side edges
-    };
-
-    DrawBatchedLines(vertices, indices, color, alpha);
-}
-
-float g_FramerateUpdateTime = 0;
 
 struct PickHit {
     I3D_frame* frame = nullptr;
@@ -1374,11 +744,7 @@ I3DENUMRET __stdcall EnumSceneFrames(I3D_frame* frame, uint32_t user) {
     return I3DENUMRET_OK;
 }
 
-void SceneEditor::Update() {
-    m_TargetCameraVelocity = {0, 0, 0};
-
-    if(m_Scene) m_Scene->Tick(m_DeltaTime * 1000.0f);
-
+void SceneEditor::OnUpdate() {
     for(auto model: m_AnimatedModels) {
         int animTime = model->GetAnimTime(0);
         int endTime = model->GetAnimationSet(0)->GetEndTime();
@@ -1392,64 +758,13 @@ void SceneEditor::Update() {
         model->Update();
     }
 
-    m_3DDriver->Tick(m_DeltaTime * 1000.0f);
-
-    m_IGraph->ProcessWinMessages();
-    m_IGraph->UpdateMouseData();
-
-    S_vector rightDir = *(S_vector*)&m_Camera->m_mLocalMat.m_11;
-    S_vector upDir = *(S_vector*)&m_Camera->m_mLocalMat.m_21;
-    S_vector forwardDir = DirFromEuler({m_CameraRot.x, -m_CameraRot.y, 0});
-
-    ImGui::SetCurrentContext(m_ImGuiContext);
 
     ImGuiIO& io = ImGui::GetIO();
 
-    if(m_IGraph->GetMouseButtons() & 2) {
-        if(!m_MouseEnabled) ToggleInput(true);
-
-        if(m_IsMovingTowardsTarget) m_IsMovingTowardsTarget = false;
-
-        if(m_KeyboardEnabled) {
-            bool isFast = ImGui::IsKeyDown(ImGuiKey_LeftShift);
-            bool isSlow = ImGui::IsKeyDown(ImGuiKey_LeftControl);
-
-            if(ImGui::IsKeyDown(ImGuiKey_W)) { m_TargetCameraVelocity += forwardDir * (isSlow ? 6.5f : (isFast ? 72.5f : 24.5f)); }
-            if(ImGui::IsKeyDown(ImGuiKey_S)) { m_TargetCameraVelocity += forwardDir * -(isSlow ? 6.5f : (isFast ? 72.5f : 24.5f)); }
-
-            if(ImGui::IsKeyDown(ImGuiKey_A)) { m_TargetCameraVelocity += rightDir * -(isSlow ? 6.5f : (isFast ? 72.5f : 24.5f)); }
-            if(ImGui::IsKeyDown(ImGuiKey_D)) { m_TargetCameraVelocity += rightDir * (isSlow ? 6.5f : (isFast ? 72.5f : 24.5f)); }
-
-            if(ImGui::IsKeyDown(ImGuiKey_Q)) { m_TargetCameraVelocity += upDir * -(isSlow ? 6.5f : (isFast ? 72.5f : 24.5f)); }
-            if(ImGui::IsKeyDown(ImGuiKey_E)) { m_TargetCameraVelocity += upDir * (isSlow ? 6.5f : (isFast ? 72.5f : 24.5f)); }
-        }
-
-        auto mouseX = m_IGraph->Mouse_rx();
-        auto mouseY = m_IGraph->Mouse_ry();
-
-        m_CameraRot.x += mouseX;
-        m_CameraRot.y += mouseY;
-
-        m_CameraRot.x = NormalizeAngle(m_CameraRot.x);
-        m_CameraRot.y = Clamp(m_CameraRot.y, -85, 85);
-    } else {
-        if(m_MouseEnabled) ToggleInput(false);
-    }
-
-    m_CurCameraVelocity = LerpVec(m_CurCameraVelocity, m_TargetCameraVelocity, 12.5f * m_DeltaTime);
-
-    if(m_IsMovingTowardsTarget) {
-        m_CameraPos = LerpVec(m_CameraPos, m_TargetPos, 16.5f * m_DeltaTime);
-    } else {
-        m_CameraPos += m_CurCameraVelocity * m_DeltaTime;
-    }
-
-    m_Camera->SetPos(m_CameraPos);
-    m_Camera->SetDir(forwardDir, 0);
-    m_Camera->Update();
-
-    if(io.MouseClicked[0] && !ImGui::IsAnyItemHovered() && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) && !ImGuizmo::IsOver()) {
-        LS3D_RESULT res = m_Scene->UnmapScreenPoint(io.MouseClickedPos[0].x, io.MouseClickedPos[0].y, g_RayOrigin, g_RayDir);
+    if(io.MouseClicked[0] && m_ViewportHovered && !ImGuizmo::IsOver()) {
+        float vpMouseX = io.MouseClickedPos[0].x - m_ViewportPos.x;
+        float vpMouseY = io.MouseClickedPos[0].y - m_ViewportPos.y;
+        LS3D_RESULT res = m_Scene->UnmapScreenPoint((int)vpMouseX, (int)vpMouseY, g_RayOrigin, g_RayDir);
 
         if(res == I3D_OK) {
             g_BestHit.dist = FLT_MAX;
@@ -1484,382 +799,432 @@ void SceneEditor::Update() {
             }
         }
     }
+}
 
-    m_IGraph->Clear(0xFF000000, 1.0, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER);
-    if(m_SceneLoaded) {
-        m_Scene->Render();
+void SceneEditor::OnRender3D() {
+    if(!m_SceneLoaded) return;
 
-        m_IGraph->SetState(ZENABLE, 1);
+    m_IGraph->SetState(ZENABLE, 1);
 
-        if(m_ShowTransformGrid) {
-            S_vector origin = {0, 0, 0};
-            S_vector camPos = m_CameraPos;
-            S_vector targetPos = {0, 0, 0};
+    if(m_ShowTransformGrid) {
+        S_vector origin = {0, 0, 0};
+        S_vector camPos = m_CameraPos;
+        S_vector targetPos = {0, 0, 0};
 
-            bool isSelected = true;
+        bool isSelected = true;
 
-            switch(m_SelectionType) {
-            case SEL_FRAME: targetPos = m_SelectedFrame->GetWorldPos(); break;
-            case SEL_CROSSPOINT: targetPos = m_SelectedCrosspoint->pos; break;
-            case SEL_WAYPOINT: targetPos = m_SelectedWaypoint->pos; break;
-            case SEL_NODE: targetPos = m_SelectedNode->pos; break;
-            default: isSelected = false;
+        switch(m_SelectionType) {
+        case SEL_FRAME: targetPos = m_SelectedFrame->GetWorldPos(); break;
+        case SEL_CROSSPOINT: targetPos = m_SelectedCrosspoint->pos; break;
+        case SEL_WAYPOINT: targetPos = m_SelectedWaypoint->pos; break;
+        case SEL_NODE: targetPos = m_SelectedNode->pos; break;
+        default: isSelected = false;
+        }
+
+        const float totalGridSize = m_GridSize * m_GridScale;
+        const S_vector color = {0.7f, 0.7f, 0.7f};
+
+        S_vector snapped = SnapToGrid(camPos);
+
+        origin = {snapped.x, 0, snapped.z};
+
+        if(isSelected) { origin.y = targetPos.y; }
+
+        S_matrix mat;
+        mat.Identity();
+
+        m_IGraph->SetWorldMatrix(mat);
+
+        // Draw lines parallel to X-axis (varying Z)
+        for(int i = 0; i <= m_GridSize; ++i) {
+            float z = -totalGridSize / 2.0f + i * m_GridScale;
+            S_vector p1 = {-totalGridSize / 2.0f, 0.0f, z};
+            S_vector p2 = {totalGridSize / 2.0f, 0.0f, z};
+            m_3DDriver->DrawLine(origin + p1, origin + p2, color, 0);
+        }
+
+        // Draw lines parallel to Z-axis (varying X)
+        for(int i = 0; i <= m_GridSize; ++i) {
+            float x = -totalGridSize / 2.0f + i * m_GridScale;
+            S_vector p1 = {x, 0.0f, -totalGridSize / 2.0f};
+            S_vector p2 = {x, 0.0f, totalGridSize / 2.0f};
+            m_3DDriver->DrawLine(origin + p1, origin + p2, color, 0);
+        }
+    }
+
+    if(m_DrawCityParts) {
+        for(CityPart& part: m_CacheParts) {
+            float dist = (m_CameraPos - part.frame->GetWorldPos()).Magnitude();
+            if(dist <= part.sphereRadius + 256) {
+                S_matrix mat;
+                mat.Identity();
+                m_IGraph->SetWorldMatrix(mat);
+                S_vector pos = (part.bbox.min + part.bbox.max) * 0.5f;
+                m_3DDriver->DrawTextA(pos, part.name.c_str(), 0x00, 0.1f);
             }
+        }
+    }
 
-            const float totalGridSize = m_GridSize * m_GridScale;
-            const S_vector color = {0.7f, 0.7f, 0.7f};
+    if(m_DrawWebNodes) {
+        for(auto& pair: m_WebNodes) {
+            WebNode& node = pair.second;
+            float dist = (m_CameraPos - node.pos).Magnitude();
 
-            S_vector snapped = SnapToGrid(camPos);
+            if(dist <= 128) {
+                S_matrix mat;
+                mat.Identity();
 
-            origin = {snapped.x, 0, snapped.z};
+                I3D_bsphere sphere;
+                sphere.pos = node.pos;
+                sphere.radius = 0.25f;
 
-            if(isSelected) { origin.y = targetPos.y; }
+                char name[64];
+                sprintf(name, "Node %u", pair.first);
+                m_3DDriver->DrawTextA(node.pos, name, 0, 0.01f);
+                m_3DDriver->DrawSphere(mat, sphere, GetWebNodeTypeColor(node.type), 0);
 
+                for(uint8_t i = 0; i < node.numEnterLinks; i++) {
+                    WebConnection& conn = node.links[i];
+
+                    if(conn.endPoint != 0xFFFF) {
+                        WebNode& targetNode = m_WebNodes[conn.endPoint];
+
+                        m_IGraph->SetWorldMatrix(mat);
+                        m_3DDriver->DrawLine(node.pos, targetNode.pos, GetWebConnTypeColor(conn.type), 0);
+                    }
+                }
+            }
+        }
+    }
+
+    if(m_DrawRoadPoints) {
+        for(auto& pair: m_RoadWaypoints) {
+            RoadWaypoint& point = pair.second;
+
+            float dist = (m_CameraPos - point.pos).Magnitude();
+
+            if(dist <= 256) {
+                S_matrix mat;
+                mat.Identity();
+
+                I3D_bsphere sphere;
+                sphere.pos = point.pos;
+                sphere.radius = 0.45f;
+
+                char name[64];
+                sprintf(name, "Waypoint %u", pair.first);
+                m_3DDriver->DrawTextA(point.pos, name, 0, 0.01f);
+                m_3DDriver->DrawSphere(mat, sphere, {0, 1, 0}, 0);
+
+                if(point.nextWaypoint != UINT16_MAX) {
+                    bool isWaypoint = (point.nextWaypoint & 0x8000) != 0;
+                    if(isWaypoint) {
+                        int id = point.nextWaypoint & 0x7FFF;
+
+                        RoadWaypoint& targetPoint = m_RoadWaypoints[id];
+
+                        m_IGraph->SetWorldMatrix(mat);
+                        m_3DDriver->DrawLine(point.pos, targetPoint.pos, {0.85f, 0.85f, 0.85f}, 0);
+                    } else {
+                        RoadCrosspoint& targetCross = m_RoadCrosspoints[point.nextWaypoint];
+
+                        m_IGraph->SetWorldMatrix(mat);
+                        m_3DDriver->DrawLine(point.pos, targetCross.pos, {0.85f, 0.85f, 0.85f}, 0);
+                    }
+                }
+
+                if(point.prevWaypoint != UINT16_MAX) {
+                    bool isWaypoint = (point.prevWaypoint & 0x8000) != 0;
+                    if(isWaypoint) {
+                        int id = point.prevWaypoint & 0x7FFF;
+
+                        RoadWaypoint& targetPoint = m_RoadWaypoints[id];
+
+                        m_IGraph->SetWorldMatrix(mat);
+                        m_3DDriver->DrawLine(point.pos, targetPoint.pos, {0.85f, 0.85f, 0.85f}, 0);
+                    } else {
+                        RoadCrosspoint& targetCross = m_RoadCrosspoints[point.prevWaypoint];
+
+                        m_IGraph->SetWorldMatrix(mat);
+                        m_3DDriver->DrawLine(point.pos, targetCross.pos, {0.85f, 0.85f, 0.85f}, 0);
+                    }
+                }
+            }
+        }
+
+        for(auto& pair: m_RoadCrosspoints) {
+            RoadCrosspoint& cross = pair.second;
+            float dist = (m_CameraPos - cross.pos).Magnitude();
+
+            if(dist <= 256) {
+                S_matrix mat;
+                mat.Identity();
+
+                I3D_bsphere sphere;
+                sphere.pos = cross.pos;
+                sphere.radius = 0.45f;
+
+                char name[64];
+                sprintf(name, "Crosspoint %u", pair.first);
+                m_3DDriver->DrawTextA(cross.pos, name, 0, 0.01f);
+                m_3DDriver->DrawSphere(mat, sphere, {0, 0, 1}, 0);
+
+                for(int i = 0; i < 4; i++) {
+                    if(cross.waypointLinks[i] != 0xFFFF && cross.directionLinks[i].crosspointLink != 0xFFFF) {
+                        RoadWaypoint& point = m_RoadWaypoints[cross.waypointLinks[i] & 0x7FFF];
+                        RoadWaypoint* nextPoint = nullptr;
+
+                        if(point.nextWaypoint & 0x8000) {
+                            nextPoint = &m_RoadWaypoints[point.nextWaypoint & 0x7FFF];
+                        } else {
+                            nextPoint = &m_RoadWaypoints[point.prevWaypoint & 0x7FFF];
+                        }
+
+                        S_vector frontPointDir = CalculateDirection(point.pos, nextPoint->pos);
+                        S_vector rightPointDir = CalculateRightDirection(frontPointDir);
+
+                        m_IGraph->SetWorldMatrix(mat);
+
+                        for(int j = 0; j < 4; j++) {
+                            RoadLane& lane = cross.directionLinks[i].lanes[j];
+
+                            m_IGraph->SetWorldMatrix(mat);
+
+                            switch(lane.type) {
+                            case 1: DrawArrow3D(point.pos + (rightPointDir * (lane.distance)), frontPointDir, 3.5f, {0, 1, 0}, 0); break;
+                            case 2: DrawArrow3D(point.pos + (rightPointDir * (lane.distance)), frontPointDir, 3.5f, {1, 0, 0}, 0); break;
+                            case 3: DrawArrow3D(point.pos + (rightPointDir * (lane.distance)), frontPointDir, 3.5f, {1, 1, 0}, 0); break;
+                            }
+
+                            if(lane.type != 0) {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for(auto frame: m_Frames) {
+        bool hasDrawnFrameSprite = false;
+
+        if(frame != m_SelectedFrame) {
+            S_vector rightDir = *(S_vector*)&frame->m_mLocalMat.m_11;
+            S_vector upDir = *(S_vector*)&frame->m_mLocalMat.m_21;
+            S_vector forwardDir = *(S_vector*)&frame->m_mLocalMat.m_31;
+            S_vector pos = frame->GetPos();
+
+            switch(frame->GetType()) {
+            case FRAME_DUMMY: {
+                m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
+                m_3DDriver->DrawLine(pos, pos + (forwardDir * 1.5f), {1, 0, 0}, 0);
+                m_3DDriver->DrawLine(pos, pos + (upDir * 1.5f), {0, 1, 0}, 0);
+                m_3DDriver->DrawLine(pos, pos + (rightDir * 1.5f), {0, 0, 1}, 0);
+                hasDrawnFrameSprite = true;
+            } break;
+            case FRAME_SOUND: {
+                m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
+                m_3DDriver->DrawSprite(pos, m_SoundIconMaterial, 0, 1.0f);
+                hasDrawnFrameSprite = true;
+            } break;
+            case FRAME_LIGHT: {
+                m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
+                I3D_light* light = (I3D_light*)frame;
+                m_3DDriver->DrawSprite(pos, m_LightIconMaterial, 0, 1.0f);
+                hasDrawnFrameSprite = true;
+            } break;
+            case FRAME_CAMERA: {
+                m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
+                I3D_camera* light = (I3D_camera*)frame;
+                m_3DDriver->DrawSprite(pos, m_CameraIconMaterial, 0, 1.0f);
+                hasDrawnFrameSprite = true;
+            } break;
+            }
+        }
+
+        Actor* actor = GetActor(frame);
+
+        if(actor) {
+            S_vector pos = frame->GetPos();
+
+            if(hasDrawnFrameSprite) { pos.y += 1.5f; }
+
+            switch(actor->GetType()) {
+            case ACTOR_DETECTOR:
+                m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
+                m_3DDriver->DrawSprite(pos, m_DetectorIconMaterial, 0, 1.0f);
+                break;
+            case ACTOR_TRAFFIC:
+                m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
+                m_3DDriver->DrawSprite(pos, m_TrafficIconMaterial, 0, 1.0f);
+                break;
+            case ACTOR_PEDESTRIANS:
+                m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
+                m_3DDriver->DrawSprite(pos, m_PedsIconMaterial, 0, 1.0f);
+                break;
+            }
+        }
+    }
+
+    if(m_DrawCityParts) {
+        for(CityPart& part: m_CacheParts) {
+            float dist = (m_CameraPos - part.frame->GetWorldPos()).Magnitude();
+            if(dist <= part.sphereRadius + 256) {
+                S_matrix mat;
+                mat.Identity();
+                m_IGraph->SetWorldMatrix(mat);
+                if(part.frame == m_SelectedFrame) {
+                    DrawWireframeBox(part.bbox, {1.0f, 0.45f, 0.45f}, 0);
+                } else {
+                    DrawWireframeBox(part.bbox, {0.90f, 0.64f, 0.06f}, 0);
+                }
+            }
+        }
+    }
+
+    if(m_DrawCollisions) {
+        for(AABBCollider* aabb: m_ColManager.aabbs) {
+            S_vector pos = (aabb->min + aabb->max) * 0.5f;
+
+            float dist = (m_CameraPos - pos).Magnitude();
+            if(dist <= 256) {
+                S_matrix mat;
+                mat.Identity();
+
+                m_IGraph->SetWorldMatrix(mat);
+                I3D_bbox bbox;
+                bbox.min = aabb->min;
+                bbox.max = aabb->max;
+                DrawWireframeBox(bbox, g_AABBColor, 0x00);
+            }
+        }
+        for(XTOBBCollider* xtobb: m_ColManager.xtobbs) {
+            S_vector pos = *(S_vector*)&xtobb->transform.m_41;
+            float dist = (m_CameraPos - pos).Magnitude();
+            if(dist <= 256) {
+                m_IGraph->SetWorldMatrix(xtobb->transform);
+                I3D_bbox bbox;
+                bbox.min = xtobb->minExtent;
+                bbox.max = xtobb->maxExtent;
+                DrawWireframeBox(bbox, g_XTOBBColor, 0x00);
+            }
+        }
+        for(OBBCollider* obb: m_ColManager.obbs) {
+            S_vector pos = *(S_vector*)&obb->transform.m_41;
+            float dist = (m_CameraPos - pos).Magnitude();
+
+            if(dist <= 256) {
+                m_IGraph->SetWorldMatrix(obb->transform);
+                I3D_bbox bbox;
+                bbox.min = obb->minExtent;
+                bbox.max = obb->maxExtent;
+                DrawWireframeBox(bbox, g_OBBColor, 0x00);
+            }
+        }
+        for(SphereCollider* sphere: m_ColManager.spheres) {
+            float dist = (m_CameraPos - sphere->pos).Magnitude();
+
+            if(dist <= 256) {
+                S_matrix mat;
+                mat.Identity();
+
+                I3D_bsphere bsphere;
+                bsphere.pos = sphere->pos;
+                bsphere.radius = sphere->radius;
+                m_3DDriver->DrawSphere(mat, bsphere, g_SphereColor, 0x00);
+            }
+        }
+        for(CylinderCollider* cylinder: m_ColManager.cylinders) {
+            S_vector pos = {cylinder->pos.x, 0, cylinder->pos.y};
+            float dist = (m_CameraPos - pos).Magnitude();
+
+            if(dist <= 256) {
+                S_matrix mat;
+                mat.Identity();
+
+                m_IGraph->SetWorldMatrix(mat);
+                DrawWireframeCylinder(pos, cylinder->radius, 512.0f, g_CylinderColor, 0x00);
+            }
+        }
+
+        /*std::vector<LineVertex> lineVerts;
+        std::vector<uint16_t> indices;
+        uint16_t vertOffset = 0;
+
+        for(MeshCollider& mesh: m_ColManager.meshes) {
+            S_vector pos = mesh.linkedFrame->GetWorldPos();
+            float dist = (m_CameraPos - pos).Magnitude();
+
+            if(dist <= 64) {
+                S_matrix worldMat = mesh.linkedFrame->GetWorldMat();
+
+                for(MeshCollider::Triangle& tri: mesh.tris) {
+                    S_vector w0 = tri.positions[0] * worldMat;
+                    S_vector w1 = tri.positions[1] * worldMat;
+                    S_vector w2 = tri.positions[2] * worldMat;
+
+                    lineVerts.push_back({w0.x, w0.y, w0.z, 0});
+                    lineVerts.push_back({w1.x, w1.y, w1.z, 0});
+                    lineVerts.push_back({w2.x, w2.y, w2.z, 0});
+
+                    indices.push_back(vertOffset + 0);
+                    indices.push_back(vertOffset + 1);
+                    indices.push_back(vertOffset + 1);
+                    indices.push_back(vertOffset + 2);
+                    indices.push_back(vertOffset + 2);
+                    indices.push_back(vertOffset + 0);
+
+                    vertOffset += 3;
+                }
+            }
+        }
+
+        if(!lineVerts.empty()) {
             S_matrix mat;
             mat.Identity();
-
             m_IGraph->SetWorldMatrix(mat);
 
-            // Draw lines parallel to X-axis (varying Z)
-            for(int i = 0; i <= m_GridSize; ++i) {
-                float z = -totalGridSize / 2.0f + i * m_GridScale;
-                S_vector p1 = {-totalGridSize / 2.0f, 0.0f, z};
-                S_vector p2 = {totalGridSize / 2.0f, 0.0f, z};
-                m_3DDriver->DrawLine(origin + p1, origin + p2, color, 0);
-            }
+            DrawBatchedLines(lineVerts, indices, g_FaceColor, 0x00);
+        }*/
+    }
+    m_IGraph->SetState(ZENABLE, 0);
 
-            // Draw lines parallel to Z-axis (varying X)
-            for(int i = 0; i <= m_GridSize; ++i) {
-                float x = -totalGridSize / 2.0f + i * m_GridScale;
-                S_vector p1 = {x, 0.0f, -totalGridSize / 2.0f};
-                S_vector p2 = {x, 0.0f, totalGridSize / 2.0f};
-                m_3DDriver->DrawLine(origin + p1, origin + p2, color, 0);
-            }
-        }
+    if(m_SelectedFrame) {
+        m_IGraph->SetState(ZENABLE, 1);
+        m_IGraph->SetWorldMatrix(m_SelectedFrame->m_mWorldMat);
+        //m_3DDriver->DrawBox(m_SelectedFrame->m_sLocalBVol.bbox, {0, 0, 0}, {1, 0, 0}, 180);
+        DrawWireframeBox(m_SelectedFrame->m_sLocalBVol.bbox, {1, 0, 0}, 0);
+        m_IGraph->SetState(ZENABLE, 0);
 
-        if(m_DrawCityParts) {
-            for(CityPart& part: m_CacheParts) {
-                float dist = (m_CameraPos - part.frame->GetWorldPos()).Magnitude();
-                if(dist <= part.sphereRadius + 256) {
-                    S_matrix mat;
-                    mat.Identity();
-                    m_IGraph->SetWorldMatrix(mat);
-                    S_vector pos = (part.bbox.min + part.bbox.max) * 0.5f;
-                    m_3DDriver->DrawTextA(pos, part.name.c_str(), 0x00, 0.1f);
-                }
-            }
-        }
+        std::vector<LineVertex> lineVerts;
+        std::vector<uint16_t> indices;
+        uint16_t vertOffset = 0;
 
-        if(m_DrawWebNodes) {
-            for(auto& pair: m_WebNodes) {
-                WebNode& node = pair.second;
-                float dist = (m_CameraPos - node.pos).Magnitude();
+        MeshCollider* mesh = GetMeshCollider(m_SelectedFrame);
 
-                if(dist <= 128) {
-                    S_matrix mat;
-                    mat.Identity();
+        if(mesh) {
+            S_vector pos = m_SelectedFrame->GetWorldPos();
+            float dist = (m_CameraPos - pos).Magnitude();
 
-                    I3D_bsphere sphere;
-                    sphere.pos = node.pos;
-                    sphere.radius = 0.25f;
+            if(dist <= 256) {
+                S_matrix worldMat = m_SelectedFrame->GetWorldMat();
 
-                    char name[64];
-                    sprintf(name, "Node %u", pair.first);
-                    m_3DDriver->DrawTextA(node.pos, name, 0, 0.01f);
-                    m_3DDriver->DrawSphere(mat, sphere, GetWebNodeTypeColor(node.type), 0);
+                for(TriangleCollider* tri: mesh->tris) {
+                    S_vector w0 = tri->vertices[0].vertexPos * worldMat;
+                    S_vector w1 = tri->vertices[1].vertexPos * worldMat;
+                    S_vector w2 = tri->vertices[2].vertexPos * worldMat;
 
-                    for(uint8_t i = 0; i < node.numEnterLinks; i++) {
-                        WebConnection& conn = node.links[i];
+                    lineVerts.push_back({w0.x, w0.y, w0.z, 0});
+                    lineVerts.push_back({w1.x, w1.y, w1.z, 0});
+                    lineVerts.push_back({w2.x, w2.y, w2.z, 0});
 
-                        if(conn.endPoint != 0xFFFF) {
-                            WebNode& targetNode = m_WebNodes[conn.endPoint];
+                    indices.push_back(vertOffset + 0);
+                    indices.push_back(vertOffset + 1);
+                    indices.push_back(vertOffset + 1);
+                    indices.push_back(vertOffset + 2);
+                    indices.push_back(vertOffset + 2);
+                    indices.push_back(vertOffset + 0);
 
-                            m_IGraph->SetWorldMatrix(mat);
-                            m_3DDriver->DrawLine(node.pos, targetNode.pos, GetWebConnTypeColor(conn.type), 0);
-                        }
-                    }
-                }
-            }
-        }
-
-        if(m_DrawRoadPoints) {
-            for(auto& pair: m_RoadWaypoints) {
-                RoadWaypoint& point = pair.second;
-
-                float dist = (m_CameraPos - point.pos).Magnitude();
-
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    I3D_bsphere sphere;
-                    sphere.pos = point.pos;
-                    sphere.radius = 0.45f;
-
-                    char name[64];
-                    sprintf(name, "Waypoint %u", pair.first);
-                    m_3DDriver->DrawTextA(point.pos, name, 0, 0.01f);
-                    m_3DDriver->DrawSphere(mat, sphere, {0, 1, 0}, 0);
-
-                    if(point.nextWaypoint != UINT16_MAX) {
-                        bool isWaypoint = (point.nextWaypoint & 0x8000) != 0;
-                        if(isWaypoint) {
-                            int id = point.nextWaypoint & 0x7FFF;
-
-                            RoadWaypoint& targetPoint = m_RoadWaypoints[id];
-
-                            m_IGraph->SetWorldMatrix(mat);
-                            m_3DDriver->DrawLine(point.pos, targetPoint.pos, {0.85f, 0.85f, 0.85f}, 0);
-                        } else {
-                            RoadCrosspoint& targetCross = m_RoadCrosspoints[point.nextWaypoint];
-
-                            m_IGraph->SetWorldMatrix(mat);
-                            m_3DDriver->DrawLine(point.pos, targetCross.pos, {0.85f, 0.85f, 0.85f}, 0);
-                        }
-                    }
-
-                    if(point.prevWaypoint != UINT16_MAX) {
-                        bool isWaypoint = (point.prevWaypoint & 0x8000) != 0;
-                        if(isWaypoint) {
-                            int id = point.prevWaypoint & 0x7FFF;
-
-                            RoadWaypoint& targetPoint = m_RoadWaypoints[id];
-
-                            m_IGraph->SetWorldMatrix(mat);
-                            m_3DDriver->DrawLine(point.pos, targetPoint.pos, {0.85f, 0.85f, 0.85f}, 0);
-                        } else {
-                            RoadCrosspoint& targetCross = m_RoadCrosspoints[point.prevWaypoint];
-
-                            m_IGraph->SetWorldMatrix(mat);
-                            m_3DDriver->DrawLine(point.pos, targetCross.pos, {0.85f, 0.85f, 0.85f}, 0);
-                        }
-                    }
-                }
-            }
-
-            for(auto& pair: m_RoadCrosspoints) {
-                RoadCrosspoint& cross = pair.second;
-                float dist = (m_CameraPos - cross.pos).Magnitude();
-
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    I3D_bsphere sphere;
-                    sphere.pos = cross.pos;
-                    sphere.radius = 0.45f;
-
-                    char name[64];
-                    sprintf(name, "Crosspoint %u", pair.first);
-                    m_3DDriver->DrawTextA(cross.pos, name, 0, 0.01f);
-                    m_3DDriver->DrawSphere(mat, sphere, {0, 0, 1}, 0);
-
-                    for(int i = 0; i < 4; i++) {
-                        if(cross.waypointLinks[i] != 0xFFFF && cross.directionLinks[i].crosspointLink != 0xFFFF) {
-                            RoadWaypoint& point = m_RoadWaypoints[cross.waypointLinks[i] & 0x7FFF];
-                            RoadWaypoint* nextPoint = nullptr;
-
-                            if(point.nextWaypoint & 0x8000) {
-                                nextPoint = &m_RoadWaypoints[point.nextWaypoint & 0x7FFF];
-                            } else {
-                                nextPoint = &m_RoadWaypoints[point.prevWaypoint & 0x7FFF];
-                            }
-
-                            S_vector frontPointDir = CalculateDirection(point.pos, nextPoint->pos);
-                            S_vector rightPointDir = CalculateRightDirection(frontPointDir);
-
-                            m_IGraph->SetWorldMatrix(mat);
-
-                            for(int j = 0; j < 4; j++) {
-                                RoadLane& lane = cross.directionLinks[i].lanes[j];
-
-                                m_IGraph->SetWorldMatrix(mat);
-
-                                switch(lane.type) {
-                                case 1: DrawArrow3D(point.pos + (rightPointDir * (lane.distance)), frontPointDir, 3.5f, {0, 1, 0}, 0); break;
-                                case 2: DrawArrow3D(point.pos + (rightPointDir * (lane.distance)), frontPointDir, 3.5f, {1, 0, 0}, 0); break;
-                                case 3: DrawArrow3D(point.pos + (rightPointDir * (lane.distance)), frontPointDir, 3.5f, {1, 1, 0}, 0); break;
-                                }
-
-                                if(lane.type != 0) {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        for(auto frame: m_Frames) {
-            bool hasDrawnFrameSprite = false;
-
-            if(frame != m_SelectedFrame) {
-                S_vector rightDir = *(S_vector*)&frame->m_mLocalMat.m_11;
-                S_vector upDir = *(S_vector*)&frame->m_mLocalMat.m_21;
-                S_vector forwardDir = *(S_vector*)&frame->m_mLocalMat.m_31;
-                S_vector pos = frame->GetPos();
-
-                switch(frame->GetType()) {
-                case FRAME_DUMMY: {
-                    m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
-                    m_3DDriver->DrawLine(pos, pos + (forwardDir * 1.5f), {1, 0, 0}, 0);
-                    m_3DDriver->DrawLine(pos, pos + (upDir * 1.5f), {0, 1, 0}, 0);
-                    m_3DDriver->DrawLine(pos, pos + (rightDir * 1.5f), {0, 0, 1}, 0);
-                    hasDrawnFrameSprite = true;
-                } break;
-                case FRAME_SOUND: {
-                    m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
-                    m_3DDriver->DrawSprite(pos, m_SoundIconMaterial, 0, 1.0f);
-                    hasDrawnFrameSprite = true;
-                } break;
-                case FRAME_LIGHT: {
-                    m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
-                    I3D_light* light = (I3D_light*)frame;
-                    m_3DDriver->DrawSprite(pos, m_LightIconMaterial, 0, 1.0f);
-                    hasDrawnFrameSprite = true;
-                } break;
-                case FRAME_CAMERA: {
-                    m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
-                    I3D_camera* light = (I3D_camera*)frame;
-                    m_3DDriver->DrawSprite(pos, m_CameraIconMaterial, 0, 1.0f);
-                    hasDrawnFrameSprite = true;
-                } break;
-                }
-            }
-
-            Actor* actor = GetActor(frame);
-
-            if(actor) {
-                S_vector pos = frame->GetPos();
-
-                if(hasDrawnFrameSprite) { pos.y += 1.5f; }
-
-                switch(actor->GetType()) {
-                case ACTOR_DETECTOR:
-                    m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
-                    m_3DDriver->DrawSprite(pos, m_DetectorIconMaterial, 0, 1.0f);
-                    break;
-                case ACTOR_TRAFFIC:
-                    m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
-                    m_3DDriver->DrawSprite(pos, m_TrafficIconMaterial, 0, 1.0f);
-                    break;
-                case ACTOR_PEDESTRIANS:
-                    m_IGraph->SetWorldMatrix(frame->m_mWorldMat);
-                    m_3DDriver->DrawSprite(pos, m_PedsIconMaterial, 0, 1.0f);
-                    break;
-                }
-            }
-        }
-
-        if(m_DrawCityParts) {
-            for(CityPart& part: m_CacheParts) {
-                float dist = (m_CameraPos - part.frame->GetWorldPos()).Magnitude();
-                if(dist <= part.sphereRadius + 256) {
-                    S_matrix mat;
-                    mat.Identity();
-                    m_IGraph->SetWorldMatrix(mat);
-                    if(part.frame == m_SelectedFrame) {
-                        DrawWireframeBox(part.bbox, {1.0f, 0.45f, 0.45f}, 0);
-                    } else {
-                        DrawWireframeBox(part.bbox, {0.90f, 0.64f, 0.06f}, 0);
-                    }
-                }
-            }
-        }
-
-        if(m_DrawCollisions) {
-            for(AABBCollider* aabb: m_ColManager.aabbs) {
-                S_vector pos = (aabb->min + aabb->max) * 0.5f;
-
-                float dist = (m_CameraPos - pos).Magnitude();
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    m_IGraph->SetWorldMatrix(mat);
-                    I3D_bbox bbox;
-                    bbox.min = aabb->min;
-                    bbox.max = aabb->max;
-                    DrawWireframeBox(bbox, g_AABBColor, 0x00);
-                }
-            }
-            for(XTOBBCollider* xtobb: m_ColManager.xtobbs) {
-                S_vector pos = *(S_vector*)&xtobb->transform.m_41;
-                float dist = (m_CameraPos - pos).Magnitude();
-                if(dist <= 256) {
-                    m_IGraph->SetWorldMatrix(xtobb->transform);
-                    I3D_bbox bbox;
-                    bbox.min = xtobb->minExtent;
-                    bbox.max = xtobb->maxExtent;
-                    DrawWireframeBox(bbox, g_XTOBBColor, 0x00);
-                }
-            }
-            for(OBBCollider* obb: m_ColManager.obbs) {
-                S_vector pos = *(S_vector*)&obb->transform.m_41;
-                float dist = (m_CameraPos - pos).Magnitude();
-
-                if(dist <= 256) {
-                    m_IGraph->SetWorldMatrix(obb->transform);
-                    I3D_bbox bbox;
-                    bbox.min = obb->minExtent;
-                    bbox.max = obb->maxExtent;
-                    DrawWireframeBox(bbox, g_OBBColor, 0x00);
-                }
-            }
-            for(SphereCollider* sphere: m_ColManager.spheres) {
-                float dist = (m_CameraPos - sphere->pos).Magnitude();
-
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    I3D_bsphere bsphere;
-                    bsphere.pos = sphere->pos;
-                    bsphere.radius = sphere->radius;
-                    m_3DDriver->DrawSphere(mat, bsphere, g_SphereColor, 0x00);
-                }
-            }
-            for(CylinderCollider* cylinder: m_ColManager.cylinders) {
-                S_vector pos = {cylinder->pos.x, 0, cylinder->pos.y};
-                float dist = (m_CameraPos - pos).Magnitude();
-
-                if(dist <= 256) {
-                    S_matrix mat;
-                    mat.Identity();
-
-                    m_IGraph->SetWorldMatrix(mat);
-                    DrawWireframeCylinder(pos, cylinder->radius, 512.0f, g_CylinderColor, 0x00);
-                }
-            }
-
-            /*std::vector<LineVertex> lineVerts;
-            std::vector<uint16_t> indices;
-            uint16_t vertOffset = 0;
-
-            for(MeshCollider& mesh: m_ColManager.meshes) {
-                S_vector pos = mesh.linkedFrame->GetWorldPos();
-                float dist = (m_CameraPos - pos).Magnitude();
-
-                if(dist <= 64) {
-                    S_matrix worldMat = mesh.linkedFrame->GetWorldMat();
-
-                    for(MeshCollider::Triangle& tri: mesh.tris) {
-                        S_vector w0 = tri.positions[0] * worldMat;
-                        S_vector w1 = tri.positions[1] * worldMat;
-                        S_vector w2 = tri.positions[2] * worldMat;
-
-                        lineVerts.push_back({w0.x, w0.y, w0.z, 0});
-                        lineVerts.push_back({w1.x, w1.y, w1.z, 0});
-                        lineVerts.push_back({w2.x, w2.y, w2.z, 0});
-
-                        indices.push_back(vertOffset + 0);
-                        indices.push_back(vertOffset + 1);
-                        indices.push_back(vertOffset + 1);
-                        indices.push_back(vertOffset + 2);
-                        indices.push_back(vertOffset + 2);
-                        indices.push_back(vertOffset + 0);
-
-                        vertOffset += 3;
-                    }
+                    vertOffset += 3;
                 }
             }
 
@@ -1869,64 +1234,12 @@ void SceneEditor::Update() {
                 m_IGraph->SetWorldMatrix(mat);
 
                 DrawBatchedLines(lineVerts, indices, g_FaceColor, 0x00);
-            }*/
-        }
-        m_IGraph->SetState(ZENABLE, 0);
-
-        if(m_SelectedFrame) {
-            m_IGraph->SetState(ZENABLE, 1);
-            m_IGraph->SetWorldMatrix(m_SelectedFrame->m_mWorldMat);
-            //m_3DDriver->DrawBox(m_SelectedFrame->m_sLocalBVol.bbox, {0, 0, 0}, {1, 0, 0}, 180);
-            DrawWireframeBox(m_SelectedFrame->m_sLocalBVol.bbox, {1, 0, 0}, 0);
-            m_IGraph->SetState(ZENABLE, 0);
-
-            std::vector<LineVertex> lineVerts;
-            std::vector<uint16_t> indices;
-            uint16_t vertOffset = 0;
-
-            MeshCollider* mesh = GetMeshCollider(m_SelectedFrame);
-
-            if(mesh) {
-                S_vector pos = m_SelectedFrame->GetWorldPos();
-                float dist = (m_CameraPos - pos).Magnitude();
-
-                if(dist <= 256) {
-                    S_matrix worldMat = m_SelectedFrame->GetWorldMat();
-
-                    for(TriangleCollider* tri: mesh->tris) {
-                        S_vector w0 = tri->vertices[0].vertexPos * worldMat;
-                        S_vector w1 = tri->vertices[1].vertexPos * worldMat;
-                        S_vector w2 = tri->vertices[2].vertexPos * worldMat;
-
-                        lineVerts.push_back({w0.x, w0.y, w0.z, 0});
-                        lineVerts.push_back({w1.x, w1.y, w1.z, 0});
-                        lineVerts.push_back({w2.x, w2.y, w2.z, 0});
-
-                        indices.push_back(vertOffset + 0);
-                        indices.push_back(vertOffset + 1);
-                        indices.push_back(vertOffset + 1);
-                        indices.push_back(vertOffset + 2);
-                        indices.push_back(vertOffset + 2);
-                        indices.push_back(vertOffset + 0);
-
-                        vertOffset += 3;
-                    }
-                }
-
-                if(!lineVerts.empty()) {
-                    S_matrix mat;
-                    mat.Identity();
-                    m_IGraph->SetWorldMatrix(mat);
-
-                    DrawBatchedLines(lineVerts, indices, g_FaceColor, 0x00);
-                }
             }
         }
     }
+}
 
-    ImGui_ImplWin32_NewFrame();
-    ImGui_ImplDX8_NewFrame();
-    ImGui::NewFrame();
+void SceneEditor::OnRenderUI() {
     ImGuizmo::BeginFrame();
 
     if(!ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
@@ -1943,7 +1256,6 @@ void SceneEditor::Update() {
         }
     }
 
-    if(g_Editor->GetSettings()->video.fullscreen) { ImGui::RenderMainMenuBar(m_MenuBar, m_IGraph->GetMainHWND()); }
 
     m_ScriptEditor.Render();
 
@@ -2340,13 +1652,18 @@ void SceneEditor::Update() {
                     S_matrix mat;
                     PackTransformComponents(&mat, &m_SelectedWaypoint->pos, &euler, &scale);
 
-                    ImGuiIO& io = ImGui::GetIO();
-                    ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-                    ImGuizmo::Manipulate((float*)&view, (float*)&proj, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, mat.e);
+                    if(m_ViewportFocused || m_ViewportHovered) {
+                        m_ViewportDrawList->PushClipRect(m_ViewportPos, ImVec2(m_ViewportPos.x + m_ViewportSize.x, m_ViewportPos.y + m_ViewportSize.y));
+                        ImGuiIO& io = ImGui::GetIO();
+                        ImGuizmo::SetDrawlist(m_ViewportDrawList);
+                        ImGuizmo::SetRect(m_ViewportPos.x, m_ViewportPos.y, m_ViewportSize.x, m_ViewportSize.y);
+                        ImGuizmo::Manipulate((float*)&view, (float*)&proj, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, mat.e);
 
-                    if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
-                        ExtractTransformComponents(&mat, &m_SelectedWaypoint->pos, &euler, &scale);
-                        if(m_TransformGridSnapping) m_SelectedWaypoint->pos = SnapToGrid(m_SelectedWaypoint->pos);
+                        if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
+                            ExtractTransformComponents(&mat, &m_SelectedWaypoint->pos, &euler, &scale);
+                            if(m_TransformGridSnapping) m_SelectedWaypoint->pos = SnapToGrid(m_SelectedWaypoint->pos);
+                        }
+                        m_ViewportDrawList->PopClipRect();
                     }
                 }
             }
@@ -2485,14 +1802,19 @@ void SceneEditor::Update() {
                     S_matrix mat;
                     PackTransformComponents(&mat, &m_SelectedCrosspoint->pos, &euler, &scale);
 
-                    ImGuiIO& io = ImGui::GetIO();
-                    ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-                    ImGuizmo::Manipulate((float*)&view, (float*)&proj, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, mat.e);
+                    if(m_ViewportFocused || m_ViewportHovered) {
+                        m_ViewportDrawList->PushClipRect(m_ViewportPos, ImVec2(m_ViewportPos.x + m_ViewportSize.x, m_ViewportPos.y + m_ViewportSize.y));
+                        ImGuiIO& io = ImGui::GetIO();
+                        ImGuizmo::SetDrawlist(m_ViewportDrawList);
+                        ImGuizmo::SetRect(m_ViewportPos.x, m_ViewportPos.y, m_ViewportSize.x, m_ViewportSize.y);
+                        ImGuizmo::Manipulate((float*)&view, (float*)&proj, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, mat.e);
 
-                    if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
-                        ExtractTransformComponents(&mat, &m_SelectedCrosspoint->pos, &euler, &scale);
+                        if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
+                            ExtractTransformComponents(&mat, &m_SelectedCrosspoint->pos, &euler, &scale);
 
-                        if(m_TransformGridSnapping) m_SelectedCrosspoint->pos = SnapToGrid(m_SelectedCrosspoint->pos);
+                            if(m_TransformGridSnapping) m_SelectedCrosspoint->pos = SnapToGrid(m_SelectedCrosspoint->pos);
+                        }
+                        m_ViewportDrawList->PopClipRect();
                     }
                 }
             }
@@ -2633,14 +1955,19 @@ void SceneEditor::Update() {
                     S_matrix mat;
                     PackTransformComponents(&mat, &m_SelectedNode->pos, &euler, &scale);
 
-                    ImGuiIO& io = ImGui::GetIO();
-                    ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-                    ImGuizmo::Manipulate((float*)&view, (float*)&proj, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, mat.e);
+                    if(m_ViewportFocused || m_ViewportHovered) {
+                        m_ViewportDrawList->PushClipRect(m_ViewportPos, ImVec2(m_ViewportPos.x + m_ViewportSize.x, m_ViewportPos.y + m_ViewportSize.y));
+                        ImGuiIO& io = ImGui::GetIO();
+                        ImGuizmo::SetDrawlist(m_ViewportDrawList);
+                        ImGuizmo::SetRect(m_ViewportPos.x, m_ViewportPos.y, m_ViewportSize.x, m_ViewportSize.y);
+                        ImGuizmo::Manipulate((float*)&view, (float*)&proj, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, mat.e);
 
-                    if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
-                        ExtractTransformComponents(&mat, &m_SelectedNode->pos, &euler, &scale);
+                        if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
+                            ExtractTransformComponents(&mat, &m_SelectedNode->pos, &euler, &scale);
 
-                        if(m_TransformGridSnapping) m_SelectedNode->pos = SnapToGrid(m_SelectedNode->pos);
+                            if(m_TransformGridSnapping) m_SelectedNode->pos = SnapToGrid(m_SelectedNode->pos);
+                        }
+                        m_ViewportDrawList->PopClipRect();
                     }
                 }
             }
@@ -2679,7 +2006,7 @@ void SceneEditor::Update() {
                     ImGui::Text("File: %s", g_ModelsMap[model].c_str());
                     ImGui::SameLine();
                     if(ImGui::Button("Browse")) {
-                        std::string path = OpenFileDialog(FileDialog::Mode::OpenFile, "Select model file", {{"4DS Model File (*.4ds)", "*.4ds"}});
+                        std::string path = SceneOpenFileDialog(FileDialog::Mode::OpenFile, "Select model file", {{"4DS Model File (*.4ds)", "*.4ds"}});
 
                         if(!path.empty()) {
                             std::string fileName = "Models\\" + ProcessFileName(path, "i3d");
@@ -2843,7 +2170,7 @@ void SceneEditor::Update() {
                         if(sound->Open(("Sounds\\" + fileName).c_str(), 0, nullptr, nullptr) == I3D_OK) { g_SoundsMap[sound] = fileName; }
                     }
                     if(ImGui::Button("Browse")) {
-                        std::string path = OpenFileDialog(FileDialog::Mode::OpenFile, "Select sound file", {{"Wave Sound File (*.wav)", "*.wav"}});
+                        std::string path = SceneOpenFileDialog(FileDialog::Mode::OpenFile, "Select sound file", {{"Wave Sound File (*.wav)", "*.wav"}});
 
                         if(!path.empty()) {
                             fileName = ProcessFileName(path, "wav");
@@ -2916,16 +2243,21 @@ void SceneEditor::Update() {
                 if(ImGui::IsKeyPressed(ImGuiKey_R) && ImGui::IsKeyDown(ImGuiKey_LeftControl)) { m_CurrentTransformOperation = ImGuizmo::ROTATE; }
                 if(ImGui::IsKeyPressed(ImGuiKey_T) && ImGui::IsKeyDown(ImGuiKey_LeftControl)) { m_CurrentTransformOperation = ImGuizmo::TRANSLATE; }
 
-                ImGuiIO& io = ImGui::GetIO();
-                ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-                ImGuizmo::Manipulate((float*)&view, (float*)&proj, m_CurrentTransformOperation, ImGuizmo::LOCAL, mat.e);
+                if(m_ViewportFocused || m_ViewportHovered) {
+                    m_ViewportDrawList->PushClipRect(m_ViewportPos, ImVec2(m_ViewportPos.x + m_ViewportSize.x, m_ViewportPos.y + m_ViewportSize.y));
+                    ImGuiIO& io = ImGui::GetIO();
+                    ImGuizmo::SetDrawlist(m_ViewportDrawList);
+                    ImGuizmo::SetRect(m_ViewportPos.x, m_ViewportPos.y, m_ViewportSize.x, m_ViewportSize.y);
+                    ImGuizmo::Manipulate((float*)&view, (float*)&proj, m_CurrentTransformOperation, ImGuizmo::LOCAL, mat.e);
 
-                if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
-                    ExtractTransformComponents(&mat, &m_SelectedFrameWorldPos, &m_SelectedFrameEuler, &m_SelectedFrameScale);
+                    if(ImGuizmo::IsUsing() && IsMouseDeltaSignificant(0.01f)) {
+                        ExtractTransformComponents(&mat, &m_SelectedFrameWorldPos, &m_SelectedFrameEuler, &m_SelectedFrameScale);
 
-                    if(m_CurrentTransformOperation == ImGuizmo::TRANSLATE && m_TransformGridSnapping) {
-                        m_SelectedFrameWorldPos = SnapToGrid(m_SelectedFrameWorldPos);
+                        if(m_CurrentTransformOperation == ImGuizmo::TRANSLATE && m_TransformGridSnapping) {
+                            m_SelectedFrameWorldPos = SnapToGrid(m_SelectedFrameWorldPos);
+                        }
                     }
+                    m_ViewportDrawList->PopClipRect();
                 }
 
                 m_SelectedFrame->SetWorldPos(m_SelectedFrameWorldPos);
@@ -3115,60 +2447,6 @@ void SceneEditor::Update() {
         m_HasSelectedReference = false;
     }
 
-    if(m_DrawPopupMessage) {
-        m_PopupMessageTime += m_DeltaTime;
-
-        if(m_PopupMessageTime > m_PopupMessageDuration) {
-            m_DrawPopupMessage = false;
-            m_PopupMessageTime = 0;
-        }
-
-        ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-        ImVec2 windowPos = ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f);
-        ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        if(m_PopupMessageTime >= m_PopupMessageFadeOutStart) {
-            ImGui::SetNextWindowBgAlpha(((m_PopupMessageDuration - m_PopupMessageFadeOutStart) - (m_PopupMessageTime - m_PopupMessageFadeOutStart)) /
-                                        (m_PopupMessageDuration - m_PopupMessageFadeOutStart));
-
-            auto& style = ImGui::GetStyle();
-
-            ImGui::PushStyleColor(
-                ImGuiCol_Border,
-                {style.Colors[ImGuiCol_Border].x,
-                 style.Colors[ImGuiCol_Border].y,
-                 style.Colors[ImGuiCol_Border].z,
-                 style.Colors[ImGuiCol_Border].w * ((m_PopupMessageDuration - m_PopupMessageFadeOutStart) - (m_PopupMessageTime - m_PopupMessageFadeOutStart)) /
-                     (m_PopupMessageDuration - m_PopupMessageFadeOutStart)});
-        }
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 16.0f);
-
-        if(ImGui::Begin("NotificationOverlay",
-                        NULL,
-                        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
-            ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[1]);
-            if(m_PopupMessageTime >= m_PopupMessageFadeOutStart) {
-                ImGui::TextColored({1.0f,
-                                    1.0f,
-                                    1.0f,
-                                    ((m_PopupMessageDuration - m_PopupMessageFadeOutStart) - (m_PopupMessageTime - m_PopupMessageFadeOutStart)) /
-                                        (m_PopupMessageDuration - m_PopupMessageFadeOutStart)},
-                                   "%s",
-                                   m_PopupMessage.c_str());
-            } else {
-                ImGui::Text("%s", m_PopupMessage.c_str());
-            }
-            ImGui::PopFont();
-
-            ImGui::End();
-        }
-
-        ImGui::PopStyleVar();
-
-        if(m_PopupMessageTime >= m_PopupMessageFadeOutStart) { ImGui::PopStyleColor(); }
-    }
-
     if(m_ShowingSceneSettings) {
         if(ImGui::Begin("Scene Settings", &m_ShowingSceneSettings)) {
             ImGui::InputText("Signature text", &m_MissionFileSignature);
@@ -3308,12 +2586,9 @@ void SceneEditor::Update() {
         }
     }
 
-    if(m_ShowTransformOptions) {
+    if(m_ShowTransformOptions && (m_ViewportFocused || m_ViewportHovered)) {
         static bool setMode = false;
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + (viewport->Size.x / 2), viewport->Pos.y + (g_Editor->GetSettings()->video.fullscreen ? 72.0f : 24.0f)),
-                                0,
-                                {0.5f, 0.5f});
+        ImGui::SetNextWindowPos(ImVec2(m_ViewportPos.x + (m_ViewportSize.x / 2), m_ViewportPos.y + 4.0f), 0, {0.5f, 0.0f});
 
         if(ImGui::Begin("#TransformOptions",
                         nullptr,
@@ -3418,75 +2693,10 @@ void SceneEditor::Update() {
         }
     }
 
-    ImGui::EndFrame();
-    ImGui::Render();
-    ImGui_ImplDX8_RenderDrawData(ImGui::GetDrawData());
-
-    QueryPerformanceCounter((LARGE_INTEGER*)&g_FrameEnd);
-    g_ElapsedTime = ElapsedMicroseconds(g_FrameStart, g_FrameEnd);
-
-    while(g_ElapsedTime < TARGET_FRAME_TIME) {
-        if((g_ElapsedTime + g_OverSleepDuration) >= TARGET_FRAME_TIME) {
-            g_OverSleepDuration -= TARGET_FRAME_TIME - g_ElapsedTime;
-            break;
-        }
-
-        Sleep(1);
-
-        QueryPerformanceCounter((LARGE_INTEGER*)&g_FrameEnd);
-        g_ElapsedTime = ElapsedMicroseconds(g_FrameStart, g_FrameEnd);
-
-        if(g_ElapsedTime > TARGET_FRAME_TIME) g_OverSleepDuration += g_ElapsedTime - TARGET_FRAME_TIME;
-    }
-
-    QueryPerformanceCounter((LARGE_INTEGER*)&g_FrameEnd);
-    g_TicksAccum += g_FrameEnd - g_FrameStart;
-    g_FrameCount += 1;
-
-    if((g_FrameCount % TARGET_FPS_CAP) == 0) {
-        g_AverageFPS = ((g_QPCFreq * TARGET_FPS_CAP) + (g_TicksAccum - 1)) / g_TicksAccum; // round-off
-        m_DeltaTime = 1.0f / g_AverageFPS;
-        g_TicksAccum = 0;
-        g_FrameCount = 0;
-    }
-
-    //m_DeltaTime = float(ElapsedMicroseconds(g_FrameStart, g_FrameEnd)) / 1000000.0f;
-
-    g_FrameStart = g_FrameEnd;
-
-    if(!g_Editor->GetSettings()->video.fullscreen) {
-        g_FramerateUpdateTime += m_DeltaTime;
-
-        if(g_FramerateUpdateTime >= 0.35f) {
-            char buf[256];
-
-            sprintf(buf, "%s | %lld fps (%.1f ms)", m_IGraph->GetAppName(), g_AverageFPS, m_DeltaTime * 1000.0f);
-            SetWindowTextA(m_IGraph->GetMainHWND(), buf);
-            g_FramerateUpdateTime = 0;
-        }
-    }
-
-    m_IGraph->Present();
+    RenderDiffPanel();
 }
 
-void SceneEditor::Shutdown() {
-    Clear();
-
-    ImGui::SetCurrentContext(m_ImGuiContext);
-
-    ImGui_ImplWin32_Shutdown();
-    ImGui_ImplDX8_Shutdown();
-    //ImGui_ImplDInput_Shutdown();
-
-    ImGui::DestroyContext(m_ImGuiContext);
-
-    m_SoundDriver->Close();
-    m_3DDriver->Close();
-    m_IGraph->Close();
-
-    DestroyMenu(m_MenuBar);
-    m_MenuBar = nullptr;
-}
+// Shutdown is now handled by BaseEditor::Shutdown()
 
 Actor* SceneEditor::GetActor(I3D_frame* frame) {
     for(auto actor: m_Actors) {
@@ -4015,7 +3225,7 @@ void SceneEditor::DeleteFrame(I3D_frame* frame) {
 I3DENUMRET __stdcall EnumColliders(I3D_frame* frame, uint32_t user) {
     SceneEditor* editor = (SceneEditor*)user;
 
-    if(strlen(frame->GetName()) >= 6 && !strnicmp(frame->GetName(), "LLwcol", 6)) { 
+    if(strlen(frame->GetName()) >= 6 && !strnicmp(frame->GetName(), "LLwcol", 6)) {
         frame->LinkTo(editor->GetScene()->GetPrimarySector(), 1);
         frame->SetOn(false);
     }
@@ -4029,51 +3239,38 @@ I3DENUMRET __stdcall EnumColliders(I3D_frame* frame, uint32_t user) {
 }
 
 bool SceneEditor::Load(const std::string& path) {
-    Clear();
+    if(!LoadScene(path)) {
+        editorLogError("Failed to load scene from %s!", path.c_str());
+        return false;
+    }
 
-    m_Scene = (I3D_scene*)m_3DDriver->CreateFrame(FRAME_SCENE);
-    m_PrimarySector = m_Scene->GetPrimarySector();
-    m_BackdropSector = m_Scene->GetBackdropSector();
-
-    m_Scene->SetActiveCamera(m_Camera);
-
-    m_CameraPos = {0, 0, 0};
-    m_CameraRot = {0, 0};
-
-    DrawProgress("Loading: scene.4ds");
-    debugPrintf("Loading: scene.4ds");
-    LS3D_RESULT res = m_Scene->Open((path + "\\scene.i3d").c_str(), 0, nullptr, nullptr);
-
-    if(I3D_FAIL(res)) { debugPrintf("Failed to load %s!", (path + "\\scene.4ds").c_str()); }
-
-    DrawProgress("Loading: scene2.bin");
-    debugPrintf("Loading: scene2.bin");
+    editorLog("Loading: scene2.bin");
     LoadSceneBin(path + "\\scene2.bin");
 
-    DrawProgress("Loading: Building scene tree");
-    debugPrintf("Building scene tree...");
+    //DrawProgress("Loading: Building scene tree");
+    editorLog("Building scene tree...");
     m_Hierarchy = BuildSceneTree();
 
     m_Scene->EnumFrames(EnumColliders, (uint32_t)this, ENUMF_VISUAL, 0);
 
-    DrawProgress("Loading: cache.bin");
-    debugPrintf("Loading: cache.bin");
+    //DrawProgress("Loading: cache.bin");
+    editorLog("Loading: cache.bin");
     LoadCacheBin(path + "\\cache.bin");
 
-    DrawProgress("Loading: tree.klz");
-    debugPrintf("Loading: tree.klz");
+    //DrawProgress("Loading: tree.klz");
+    editorLog("Loading: tree.klz");
     LoadTreeKlz(path + "\\tree.klz");
 
-    DrawProgress("Loading: road.bin");
-    debugPrintf("Loading: road.bin");
+    //DrawProgress("Loading: road.bin");
+    editorLog("Loading: road.bin");
     LoadRoadBin(path + "\\road.bin");
 
-    DrawProgress("Loading: check.bin");
-    debugPrintf("Loading: check.bin");
+    //DrawProgress("Loading: check.bin");
+    editorLog("Loading: check.bin");
     LoadCheckBin(path + "\\check.bin");
 
     m_MissionPath = path;
-    EnableMenuItem(m_FileMenu, MCMD_FILE_SAVE, MF_BYCOMMAND | MF_ENABLED);
+    EnableMenuItem(m_FileMenu, BCMD_FILE_SAVE, MF_BYCOMMAND | MF_ENABLED);
 
     char buf[256];
     sprintf(buf, "Scene Editor - %s", path.c_str());
@@ -4082,8 +3279,9 @@ bool SceneEditor::Load(const std::string& path) {
 
     m_IGraph->SetAppName(buf);
 
-    m_SceneLoaded = true;
     g_ChangesMade = false;
+
+    OnSceneLoaded();
 
     return true;
 }
@@ -4091,7 +3289,7 @@ bool SceneEditor::Load(const std::string& path) {
 bool SceneEditor::LoadSceneBin(const std::string& fileName) {
     BinaryReader reader(fileName);
     if(!reader.IsOpen()) {
-        debugPrintf("Failed to load %s!", fileName.c_str());
+        editorLogError("Failed to load %s!", fileName.c_str());
         return false;
     }
 
@@ -4329,19 +3527,19 @@ bool SceneEditor::LoadCheckBin(const std::string& fileName) {
 bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
     BinaryReader reader(fileName);
     if(!reader.IsOpen()) {
-        debugPrintf("Failed to load %s: Failed to open the file", fileName.c_str());
+        editorLogError("Failed to load %s: Failed to open the file", fileName.c_str());
         return false;
     }
 
     std::string fourCC = reader.ReadFixedString(4);
     if(fourCC != "GifC") {
-        debugPrintf("Failed to load %s: Not a valid collision file", fileName.c_str());
+        editorLogError("Failed to load %s: Not a valid collision file", fileName.c_str());
         return false;
     }
 
     uint32_t version = reader.ReadUInt32();
     if(version != 0x00000005) { // VERSION_MAFIA
-        debugPrintf("Failed to load %s: Invalid file version", fileName.c_str());
+        editorLogError("Failed to load %s: Invalid file version", fileName.c_str());
         return false;
     }
 
@@ -4362,7 +3560,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         std::string name = reader.ReadNullTerminatedString();
         m_ColManager.links[i].frame = FindFrameByName(name);
         if(!m_ColManager.links[i].frame) {
-            debugPrintf("The tree.klz file is referencing an non-existent frame \"%s\", all colliders referencing this frame will be ignored.", name.c_str());
+            editorLogWarning("The tree.klz file is referencing a non-existent frame \"%s\", colliders referencing this frame will be ignored.", name.c_str());
         }
         size_t len = name.length() + 1;
         int padding = static_cast<int>(len % 4);
@@ -4439,7 +3637,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         HierarchyEntry* entry = FindEntryByFrame(collider->vertices[0].linkedFrame);
 
         if(entry) {
-            for (int j = 0; j < 3; j++) {
+            for(int j = 0; j < 3; j++) {
                 S_vertex_3d* vertices = nullptr;
                 if(collider->vertices[j].linkedFrame->GetType() == FRAME_VISUAL) {
                     I3D_visual* visual = (I3D_visual*)collider->vertices[j].linkedFrame;
@@ -4474,8 +3672,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
                 MeshCollider* meshCollider = GetMeshCollider(collider->vertices[0].linkedFrame);
                 meshCollider->tris.push_back(collider);
             }
-        }
-        else {
+        } else {
             trisToRemove.push_back(i);
         }
 
@@ -4487,7 +3684,7 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
     m_ColManager.aabbs.resize(numAABBs);
     for(AABBCollider*& collider: m_ColManager.aabbs) {
         collider = new AABBCollider();
-        
+
         collider->ReadData(&reader);
         uint32_t linkId = reader.ReadUInt32();
         collider->linkedFrame = m_ColManager.links[linkId].frame;
@@ -4497,10 +3694,9 @@ bool SceneEditor::LoadTreeKlz(const std::string& fileName) {
         HierarchyEntry* entry = FindEntryByFrame(collider->linkedFrame);
         if(entry) {
             entry->colliders.push_back(collider);
-            
+
             m_ColManager.colliders.push_back(collider);
-        }
-        else {
+        } else {
             aabbsToRemove.push_back(i);
         }
         i++;
@@ -4861,7 +4057,7 @@ bool SceneEditor::ReadChunk(E_CHUNK_TYPE chunkType, ChunkReader& chunk) {
 
                             LS3D_RESULT res = object->Load(chunk.GetReader()->GetDescriptor());
 
-                            if(I3D_FAIL(res)) { debugPrintf("Failed to load lightmap data for %s: %s", frame->GetName(), I3DGetResultMessage(res)); }
+                            if(I3D_FAIL(res)) { editorLogError("Failed to load lightmap data for %s: %s", frame->GetName(), I3DGetResultMessage(res)); }
                         }
                     } break;
 
@@ -5135,7 +4331,7 @@ void SceneEditor::WriteFrame(I3D_frame* frame, ChunkWriter& chunk, bool forceWri
                     chunk += CT_MODIFY_LIT_OBJECT;
                     {
                         if(I3D_FAIL(obj->CustomSave(chunk.GetWriter()))) {
-                            debugPrintf("Frame %s failed to write LM data - the scene file will be corrupted.", obj->GetName());
+                            editorLogError("Frame %s failed to write LM data - the scene file will be corrupted.", obj->GetName());
                             m_SavedProperly = false;
                         }
                         --chunk;
@@ -5617,8 +4813,8 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
 
         std::vector<ColliderInfo> colliderInfos;
 
-        // NOTE: I need to undefine "min" here in order to make std::min work
-        #undef min
+// NOTE: I need to undefine "min" here in order to make std::min work
+#undef min
 
         // Track array start positions relative to gridDataOffset for cell reference fixup
         size_t faceBaseOffset = writer.GetCurPos() - gridDataOffset;
@@ -5716,11 +4912,11 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                     base = faceBaseOffset;
                 } else {
                     switch(ref.volumeType) {
-                    case Collider::VOLUME_XTOBB:    base = xtobBaseOffset;     break;
-                    case Collider::VOLUME_AABB:     base = aabbBaseOffset;     break;
-                    case Collider::VOLUME_SPHERE:   base = sphereBaseOffset;   break;
-                    case Collider::VOLUME_OBB:      base = obbBaseOffset;      break;
-                    case Collider::VOLUME_CYLINDER:  base = cylinderBaseOffset; break;
+                    case Collider::VOLUME_XTOBB: base = xtobBaseOffset; break;
+                    case Collider::VOLUME_AABB: base = aabbBaseOffset; break;
+                    case Collider::VOLUME_SPHERE: base = sphereBaseOffset; break;
+                    case Collider::VOLUME_OBB: base = obbBaseOffset; break;
+                    case Collider::VOLUME_CYLINDER: base = cylinderBaseOffset; break;
                     default: base = 0; break;
                     }
                 }
@@ -5731,9 +4927,9 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
         // Write grid cells
         for(const GridCell& cell: m_ColManager.cells) {
             writer.WriteUInt32(cell.numVolumes);
-            writer.WriteInt32(0);               // offset 4: overwritten by pReferences at runtime
-            writer.WriteSingle(cell.height);     // offset 8: overwritten by pFlags at runtime
-            writer.WriteSingle(cell.width);      // offset 12: max Y height threshold used by collision checks
+            writer.WriteInt32(0); // offset 4: overwritten by pReferences at runtime
+            writer.WriteSingle(cell.height); // offset 8: overwritten by pFlags at runtime
+            writer.WriteSingle(cell.width); // offset 12: max Y height threshold used by collision checks
             if(cell.numVolumes) {
                 for(const GridCell::Reference& ref: cell.references) {
                     // Face refs: type byte must be 0x00 (loader adds full 32-bit value to pFaces).
@@ -5754,6 +4950,498 @@ void SceneEditor::WriteTreeKlz(const std::string& fileName) {
                 }
             }
         }
+    }
+}
+
+// ============================================================================
+// Differences (.chg) support
+// ============================================================================
+
+static const char* GetChgEntryTypeName(ChgEntry::Type type) {
+    switch (type) {
+    case ChgEntry::ENTRY_FRAME_DEFINITION: return "Frame Definition";
+    case ChgEntry::ENTRY_ACTOR_ON_NEW: return "Actor (New)";
+    case ChgEntry::ENTRY_ACTOR_ON_EXISTING: return "Actor (Existing)";
+    case ChgEntry::ENTRY_SCRIPT: return "Script";
+    default: return "Unknown";
+    }
+}
+
+static const char* GetChgFrameTypeName(uint32_t frameType) {
+    switch (frameType) {
+    case CHG_FT_LIGHT: return "Light";
+    case CHG_FT_SOUND: return "Sound";
+    case CHG_FT_DUMMY: return "Dummy";
+    case CHG_FT_MODEL: return "Model";
+    default: return "Other";
+    }
+}
+
+bool SceneEditor::LoadDiffFile(const std::string& path) {
+    CloseDiffFile();
+
+    if (!LoadChgFile(path, m_DiffFile)) {
+        editorLogError("Failed to load diff file: %s", path.c_str());
+        return false;
+    }
+
+    m_DiffFilePath = path;
+    m_DiffLoaded = true;
+    m_DiffDirty = false;
+    m_SelectedDiffEntry = -1;
+
+    // Enable menu items
+    EnableMenuItem(m_DiffMenu, MCMD_DIFF_SAVE, MF_BYCOMMAND | MF_ENABLED);
+    EnableMenuItem(m_DiffMenu, MCMD_DIFF_SAVE_AS, MF_BYCOMMAND | MF_ENABLED);
+    EnableMenuItem(m_DiffMenu, MCMD_DIFF_CLOSE, MF_BYCOMMAND | MF_ENABLED);
+    EnableMenuItem(m_DiffMenu, MCMD_DIFF_NEW_FRAME, MF_BYCOMMAND | MF_ENABLED);
+
+    ApplyDiffToScene();
+
+    editorLog("Loaded diff file: %s (%d entries)", path.c_str(), (int)m_DiffFile.entries.size());
+    ShowPopupMessage("Differences file loaded.");
+    return true;
+}
+
+bool SceneEditor::SaveDiffFile(const std::string& path) {
+    // Sync live transforms back into diff data
+    for (int i = 0; i < (int)m_DiffFile.entries.size(); i++) {
+        UpdateDiffEntryFromScene(i);
+    }
+
+    if (!SaveChgFile(path, m_DiffFile)) {
+        editorLogError("Failed to save diff file: %s", path.c_str());
+        return false;
+    }
+
+    m_DiffFilePath = path;
+    m_DiffDirty = false;
+    ShowPopupMessage("Differences file saved.");
+    return true;
+}
+
+void SceneEditor::CloseDiffFile() {
+    CleanupDiffSceneFrames();
+    m_DiffFile.Clear();
+    m_DiffFilePath.clear();
+    m_DiffLoaded = false;
+    m_DiffDirty = false;
+    m_SelectedDiffEntry = -1;
+
+    // Disable menu items
+    if (m_DiffMenu) {
+        EnableMenuItem(m_DiffMenu, MCMD_DIFF_SAVE, MF_BYCOMMAND | MF_GRAYED);
+        EnableMenuItem(m_DiffMenu, MCMD_DIFF_SAVE_AS, MF_BYCOMMAND | MF_GRAYED);
+        EnableMenuItem(m_DiffMenu, MCMD_DIFF_CLOSE, MF_BYCOMMAND | MF_GRAYED);
+        EnableMenuItem(m_DiffMenu, MCMD_DIFF_NEW_FRAME, MF_BYCOMMAND | MF_GRAYED);
+    }
+}
+
+void SceneEditor::ApplyDiffToScene() {
+    CleanupDiffSceneFrames();
+    m_DiffCreatedFrames.resize(m_DiffFile.entries.size(), nullptr);
+
+    for (int i = 0; i < (int)m_DiffFile.entries.size(); i++) {
+        auto& entry = m_DiffFile.entries[i];
+        if (entry.type != ChgEntry::ENTRY_FRAME_DEFINITION) continue;
+
+        auto& fd = entry.frameDef;
+
+        // Check if frame already exists in scene
+        I3D_frame* existing = m_Scene->FindFrame(fd.frameName.c_str(), ENUMF_ALL);
+        if (existing) {
+            existing->SetPos(fd.position);
+            existing->SetScale(fd.scale);
+            existing->SetRot(fd.rotation);
+            m_DiffCreatedFrames[i] = existing; // track for selection, but don't own
+            continue;
+        }
+
+        // Create new frame
+        I3D_frame* frame = nullptr;
+        switch (fd.frameType) {
+        case CHG_FT_MODEL: {
+            I3D_model* model = (I3D_model*)m_3DDriver->CreateFrame(FRAME_MODEL);
+            if (!fd.modelData.modelFileName.empty()) {
+                if (model->Open(("Models\\" + fd.modelData.modelFileName).c_str()) == I3D_OK) {
+                    g_ModelsMap[model] = fd.modelData.modelFileName;
+                }
+            }
+            frame = model;
+            break;
+        }
+        case CHG_FT_LIGHT: {
+            I3D_light* light = (I3D_light*)m_3DDriver->CreateFrame(FRAME_LIGHT);
+            light->SetLightType((I3D_LIGHTTYPE)fd.lightData.lightType);
+            light->SetColor2(fd.lightData.color);
+            light->SetRange(0.0f, fd.lightData.range);
+            light->SetCone(fd.lightData.coneInner, fd.lightData.coneOuter);
+            light->SetMode(fd.lightData.lightMode);
+            light->SetOn(fd.lightData.isOn != 0);
+
+            for (const auto& sectorName : fd.lightData.sectorLinks) {
+                I3D_frame* sectorFrame = m_Scene->FindFrame(sectorName.c_str(), ENUMF_ALL);
+                if (sectorFrame && sectorFrame->GetType() == FRAME_SECTOR) {
+                    ((I3D_sector*)sectorFrame)->AddLight(light);
+                }
+            }
+            frame = light;
+            break;
+        }
+        case CHG_FT_SOUND: {
+            I3D_sound* sound = (I3D_sound*)m_3DDriver->CreateFrame(FRAME_SOUND);
+            if (!fd.soundData.soundFileName.empty()) {
+                if (sound->Open(("Sounds\\" + fd.soundData.soundFileName).c_str(), 0, nullptr, nullptr) == I3D_OK) {
+                    g_SoundsMap[sound] = fd.soundData.soundFileName;
+                }
+            }
+            sound->SetVolume(fd.soundData.volume);
+            sound->SetRange(fd.soundData.rangeNear, fd.soundData.rangeFar, 0, 0);
+            sound->SetLoop(fd.soundData.loop != 0);
+            sound->SetOn(fd.soundData.isOn != 0);
+            frame = sound;
+            break;
+        }
+        default: {
+            frame = m_3DDriver->CreateFrame((I3D_FRAME_TYPE)fd.frameType);
+            break;
+        }
+        }
+
+        if (frame) {
+            frame->SetName(fd.frameName.c_str());
+            frame->SetPos(fd.position);
+            frame->SetScale(fd.scale);
+            frame->SetRot(fd.rotation);
+
+            m_Scene->AddFrame(frame);
+
+            I3D_frame* parent = nullptr;
+            if (!fd.parentName.empty()) {
+                parent = m_Scene->FindFrame(fd.parentName.c_str(), ENUMF_ALL);
+            }
+            frame->LinkTo(parent ? parent : m_PrimarySector);
+
+            m_DiffCreatedFrames[i] = frame;
+            m_Frames.push_back(frame);
+            m_CreatedFrames.push_back(frame);
+
+            // Add to hierarchy
+            auto psEntry = FindEntryByName("Primary sector");
+            if (psEntry) {
+                HierarchyEntry he;
+                he.frame = frame;
+                he.name = fd.frameName;
+                he.parent = psEntry;
+                psEntry->children.push_back(he);
+            }
+        }
+    }
+}
+
+void SceneEditor::CleanupDiffSceneFrames() {
+    // Note: frames that were "existing" in scene are not owned by us,
+    // and frames we created are tracked in m_CreatedFrames for scene cleanup.
+    // We just clear our tracking vector.
+    m_DiffCreatedFrames.clear();
+}
+
+void SceneEditor::AddDiffFrameDefinition(uint32_t frameType) {
+    ChgEntry entry;
+    entry.type = ChgEntry::ENTRY_FRAME_DEFINITION;
+    entry.frameDef.frameType = frameType;
+    entry.frameDef.frameName = "NewDiffFrame_" + std::to_string(m_DiffFile.entries.size());
+    entry.frameDef.position = m_CameraPos + DirFromEuler({m_CameraRot.x, -m_CameraRot.y, 0}) * 6.5f;
+    entry.frameDef.scale = {1, 1, 1};
+    entry.frameDef.rotation = {0, 0, 0, 1};
+
+    m_DiffFile.entries.push_back(std::move(entry));
+    m_DiffDirty = true;
+
+    // Re-apply to scene to create the 3D frame
+    ApplyDiffToScene();
+
+    m_SelectedDiffEntry = (int)m_DiffFile.entries.size() - 1;
+}
+
+void SceneEditor::RemoveDiffEntry(int index) {
+    if (index < 0 || index >= (int)m_DiffFile.entries.size()) return;
+
+    m_DiffFile.entries.erase(m_DiffFile.entries.begin() + index);
+    m_DiffDirty = true;
+
+    if (m_SelectedDiffEntry >= (int)m_DiffFile.entries.size()) {
+        m_SelectedDiffEntry = (int)m_DiffFile.entries.size() - 1;
+    }
+
+    // Re-apply to scene
+    ApplyDiffToScene();
+}
+
+void SceneEditor::UpdateDiffEntryFromScene(int index) {
+    if (index < 0 || index >= (int)m_DiffFile.entries.size()) return;
+    if (index >= (int)m_DiffCreatedFrames.size()) return;
+
+    auto& entry = m_DiffFile.entries[index];
+    if (entry.type != ChgEntry::ENTRY_FRAME_DEFINITION) return;
+
+    I3D_frame* frame = m_DiffCreatedFrames[index];
+    if (!frame) return;
+
+    entry.frameDef.position = frame->GetPos();
+    entry.frameDef.scale = frame->GetScale();
+    entry.frameDef.rotation = frame->GetRot();
+}
+
+void SceneEditor::RenderDiffPanel() {
+    if (ImGui::Begin("Differences", 0, ImGuiWindowFlags_NoCollapse)) {
+        if (!m_DiffLoaded) {
+            ImGui::TextDisabled("No .chg file loaded");
+            ImGui::TextDisabled("Use Differences > Open .chg to load one");
+        } else {
+            ImGui::Text("Entries: %d", (int)m_DiffFile.entries.size());
+            if (m_DiffDirty) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "(modified)");
+            }
+            ImGui::Separator();
+
+            if (ImGui::BeginTable("##diff_entries", 4,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY)) {
+
+                ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+                ImGui::TableSetupColumn("Chunk Type");
+                ImGui::TableSetupColumn("Name");
+                ImGui::TableSetupColumn("Frame Type", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableHeadersRow();
+
+                for (int i = 0; i < (int)m_DiffFile.entries.size(); i++) {
+                    auto& entry = m_DiffFile.entries[i];
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+
+                    bool selected = (m_SelectedDiffEntry == i);
+                    char label[32];
+                    sprintf(label, "%d", i);
+                    if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                        m_SelectedDiffEntry = i;
+
+                        // Select the associated 3D frame if available
+                        if (i < (int)m_DiffCreatedFrames.size() && m_DiffCreatedFrames[i]) {
+                            SelectFrame(m_DiffCreatedFrames[i]);
+                        }
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(GetChgEntryTypeName(entry.type));
+
+                    ImGui::TableNextColumn();
+                    switch (entry.type) {
+                    case ChgEntry::ENTRY_FRAME_DEFINITION:
+                        ImGui::TextUnformatted(entry.frameDef.frameName.c_str());
+                        break;
+                    case ChgEntry::ENTRY_ACTOR_ON_EXISTING:
+                        ImGui::TextUnformatted(entry.actorExisting.frameName.c_str());
+                        break;
+                    default:
+                        ImGui::TextDisabled("---");
+                        break;
+                    }
+
+                    ImGui::TableNextColumn();
+                    if (entry.type == ChgEntry::ENTRY_FRAME_DEFINITION) {
+                        ImGui::TextUnformatted(GetChgFrameTypeName(entry.frameDef.frameType));
+                    } else {
+                        ImGui::TextDisabled("---");
+                    }
+                }
+
+                ImGui::EndTable();
+            }
+
+            // Context area - show inspector for selected entry
+            if (m_SelectedDiffEntry >= 0 && m_SelectedDiffEntry < (int)m_DiffFile.entries.size()) {
+                ImGui::Separator();
+                RenderDiffInspector();
+            }
+        }
+    }
+    ImGui::End();
+}
+
+void SceneEditor::RenderDiffInspector() {
+    auto& entry = m_DiffFile.entries[m_SelectedDiffEntry];
+
+    ImGui::Text("Entry #%d - %s", m_SelectedDiffEntry, GetChgEntryTypeName(entry.type));
+
+    if (ImGui::Button("Remove Entry")) {
+        RemoveDiffEntry(m_SelectedDiffEntry);
+        return;
+    }
+
+    switch (entry.type) {
+    case ChgEntry::ENTRY_FRAME_DEFINITION: {
+        auto& fd = entry.frameDef;
+
+        // Frame name
+        char nameBuf[256];
+        strncpy(nameBuf, fd.frameName.c_str(), sizeof(nameBuf) - 1);
+        nameBuf[sizeof(nameBuf) - 1] = 0;
+        if (ImGui::InputText("Frame Name", nameBuf, sizeof(nameBuf))) {
+            fd.frameName = nameBuf;
+            m_DiffDirty = true;
+        }
+
+        // Parent name
+        char parentBuf[256];
+        strncpy(parentBuf, fd.parentName.c_str(), sizeof(parentBuf) - 1);
+        parentBuf[sizeof(parentBuf) - 1] = 0;
+        if (ImGui::InputText("Parent Name", parentBuf, sizeof(parentBuf))) {
+            fd.parentName = parentBuf;
+            m_DiffDirty = true;
+        }
+
+        // Frame type selector
+        const char* frameTypes[] = {"Light (2)", "Sound (4)", "Dummy (6)", "Model (9)"};
+        int currentFtIdx = 0;
+        switch (fd.frameType) {
+        case CHG_FT_LIGHT: currentFtIdx = 0; break;
+        case CHG_FT_SOUND: currentFtIdx = 1; break;
+        case CHG_FT_DUMMY: currentFtIdx = 2; break;
+        case CHG_FT_MODEL: currentFtIdx = 3; break;
+        }
+        if (ImGui::Combo("Frame Type", &currentFtIdx, frameTypes, 4)) {
+            const uint32_t typeMap[] = {CHG_FT_LIGHT, CHG_FT_SOUND, CHG_FT_DUMMY, CHG_FT_MODEL};
+            fd.frameType = typeMap[currentFtIdx];
+            m_DiffDirty = true;
+        }
+
+        // Transform
+        if (ImGui::DragFloat3("Position", &fd.position.x, 0.1f)) { m_DiffDirty = true; }
+        if (ImGui::DragFloat3("Scale", &fd.scale.x, 0.01f)) { m_DiffDirty = true; }
+
+        S_vector euler = EulerFromQuat(fd.rotation);
+        if (ImGui::DragFloat3("Rotation", &euler.x, 0.5f)) {
+            fd.rotation = QuatFromEuler(euler);
+            m_DiffDirty = true;
+        }
+
+        ImGui::Separator();
+
+        // Type-specific properties
+        switch (fd.frameType) {
+        case CHG_FT_MODEL: {
+            char modelBuf[256];
+            strncpy(modelBuf, fd.modelData.modelFileName.c_str(), sizeof(modelBuf) - 1);
+            modelBuf[sizeof(modelBuf) - 1] = 0;
+            if (ImGui::InputText("Model File", modelBuf, sizeof(modelBuf))) {
+                fd.modelData.modelFileName = modelBuf;
+                m_DiffDirty = true;
+            }
+            break;
+        }
+        case CHG_FT_LIGHT: {
+            if (ImGui::DragFloat("Range", &fd.lightData.range, 0.1f)) { m_DiffDirty = true; }
+            if (ImGui::ColorEdit3("Color", &fd.lightData.color.x)) { m_DiffDirty = true; }
+            if (ImGui::DragFloat("Cone Inner", &fd.lightData.coneInner, 0.01f)) { m_DiffDirty = true; }
+            if (ImGui::DragFloat("Cone Outer", &fd.lightData.coneOuter, 0.01f)) { m_DiffDirty = true; }
+
+            int lightType = (int)fd.lightData.lightType;
+            if (ImGui::InputInt("Light Type", &lightType)) {
+                fd.lightData.lightType = (uint32_t)lightType;
+                m_DiffDirty = true;
+            }
+            int lightMode = (int)fd.lightData.lightMode;
+            if (ImGui::InputInt("Light Mode", &lightMode)) {
+                fd.lightData.lightMode = (uint32_t)lightMode;
+                m_DiffDirty = true;
+            }
+
+            bool on = fd.lightData.isOn != 0;
+            if (ImGui::Checkbox("Light On", &on)) {
+                fd.lightData.isOn = on ? 1 : 0;
+                m_DiffDirty = true;
+            }
+            break;
+        }
+        case CHG_FT_SOUND: {
+            char soundBuf[256];
+            strncpy(soundBuf, fd.soundData.soundFileName.c_str(), sizeof(soundBuf) - 1);
+            soundBuf[sizeof(soundBuf) - 1] = 0;
+            if (ImGui::InputText("Sound File", soundBuf, sizeof(soundBuf))) {
+                fd.soundData.soundFileName = soundBuf;
+                m_DiffDirty = true;
+            }
+            if (ImGui::DragFloat("Volume", &fd.soundData.volume, 0.01f, 0.0f, 1.0f)) { m_DiffDirty = true; }
+            if (ImGui::DragFloat("Range Near", &fd.soundData.rangeNear, 0.1f)) { m_DiffDirty = true; }
+            if (ImGui::DragFloat("Range Far", &fd.soundData.rangeFar, 0.1f)) { m_DiffDirty = true; }
+            if (ImGui::DragFloat("Cone Angle", &fd.soundData.coneAngle, 0.1f)) { m_DiffDirty = true; }
+
+            bool loop = fd.soundData.loop != 0;
+            if (ImGui::Checkbox("Loop", &loop)) {
+                fd.soundData.loop = loop ? 1 : 0;
+                m_DiffDirty = true;
+            }
+            bool on = fd.soundData.isOn != 0;
+            if (ImGui::Checkbox("Sound On", &on)) {
+                fd.soundData.isOn = on ? 1 : 0;
+                m_DiffDirty = true;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+
+        // Sync button - push current UI values to the 3D frame
+        if (m_SelectedDiffEntry < (int)m_DiffCreatedFrames.size() && m_DiffCreatedFrames[m_SelectedDiffEntry]) {
+            if (ImGui::Button("Apply to Scene")) {
+                I3D_frame* frame = m_DiffCreatedFrames[m_SelectedDiffEntry];
+                frame->SetPos(fd.position);
+                frame->SetScale(fd.scale);
+                frame->SetRot(fd.rotation);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Read from Scene")) {
+                UpdateDiffEntryFromScene(m_SelectedDiffEntry);
+                m_DiffDirty = true;
+            }
+        }
+        break;
+    }
+
+    case ChgEntry::ENTRY_ACTOR_ON_NEW: {
+        int actorType = (int)entry.actorNew.actorType;
+        if (ImGui::InputInt("Actor Type", &actorType)) {
+            entry.actorNew.actorType = (uint32_t)actorType;
+            m_DiffDirty = true;
+        }
+        ImGui::Text("Raw data: %d bytes", (int)entry.actorNew.rawData.size());
+        break;
+    }
+
+    case ChgEntry::ENTRY_ACTOR_ON_EXISTING: {
+        char frameBuf[256];
+        strncpy(frameBuf, entry.actorExisting.frameName.c_str(), sizeof(frameBuf) - 1);
+        frameBuf[sizeof(frameBuf) - 1] = 0;
+        if (ImGui::InputText("Frame Name", frameBuf, sizeof(frameBuf))) {
+            entry.actorExisting.frameName = frameBuf;
+            m_DiffDirty = true;
+        }
+        int actorType = (int)entry.actorExisting.actorType;
+        if (ImGui::InputInt("Actor Type", &actorType)) {
+            entry.actorExisting.actorType = (uint32_t)actorType;
+            m_DiffDirty = true;
+        }
+        ImGui::Text("Extra data: %d bytes", (int)entry.actorExisting.extraData.size());
+        break;
+    }
+
+    case ChgEntry::ENTRY_SCRIPT: {
+        ImGui::Text("Script data: %d bytes", (int)entry.scriptData.rawData.size());
+        break;
+    }
     }
 }
 
@@ -5778,70 +5466,54 @@ void SceneEditor::Save(const std::string& path) {
     }
 }
 
-void SceneEditor::ToggleInput(bool state) {
-    //ImGui_ImplDInput_Data* inputData = ImGui_ImplDInput_GetData();
+// ToggleInput is now handled by BaseEditor::ToggleInput()
 
-    m_MouseEnabled = state;
+void SceneEditor::OnClear() {
+    if(!m_SceneLoaded) return;
 
-    m_KeyboardEnabled = state;
+    CleanupDiffSceneFrames();
+    m_DiffFile.Clear();
+    m_DiffFilePath.clear();
+    m_DiffLoaded = false;
+    m_DiffDirty = false;
+    m_SelectedDiffEntry = -1;
 
-    if(m_MouseEnabled) {
-        m_LS3DMouseDevice->SetCooperativeLevel(m_IGraph->GetMainHWND(), DISCL_EXCLUSIVE);
-    } else {
-        m_LS3DMouseDevice->SetCooperativeLevel(m_IGraph->GetMainHWND(), DISCL_NONEXCLUSIVE);
+    ClearSelection();
+
+    for(auto actor: m_Actors) {
+        DeleteActor(actor->GetFrame());
     }
 
-    ShowCursor(!m_MouseEnabled);
-}
+    EnableMenuItem(m_FileMenu, BCMD_FILE_SAVE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
 
-void SceneEditor::Clear() {
-    if(m_SceneLoaded) {
-        ClearSelection();
+    for(auto frame: m_CreatedFrames) {
+        m_Scene->DeleteFrame(frame);
+        frame->LinkTo(NULL);
+        frame->Release();
+    }
 
-        for(auto actor: m_Actors) {
-            DeleteActor(actor->GetFrame());
-        }
-
-        EnableMenuItem(m_FileMenu, MCMD_FILE_SAVE, MF_BYCOMMAND | MF_DISABLED | MF_GRAYED);
-
-        for(auto frame: m_CreatedFrames) {
+    for(auto part: m_CacheParts) {
+        for(auto frame: part.models) {
             m_Scene->DeleteFrame(frame);
             frame->LinkTo(NULL);
             frame->Release();
         }
-
-        for(auto part: m_CacheParts) {
-            for(auto frame: part.models) {
-                m_Scene->DeleteFrame(frame);
-                frame->LinkTo(NULL);
-                frame->Release();
-            }
-        }
-
-        m_Frames.clear();
-        m_CacheParts.clear();
-        m_Actors.clear();
-        m_Scripts.clear();
-        m_WebNodes.clear();
-        m_RoadWaypoints.clear();
-        m_RoadCrosspoints.clear();
-        m_AnimatedModels.clear();
-        m_LightmapObjects.clear();
-
-        m_ColManager.Clear();
-
-        g_ModelsMap.clear();
-        g_SoundsMap.clear();
-
-        m_Scene->Close();
-
-        m_SceneLoaded = false;
-
-        // NOTE: Release the scene - I don't know how to delete frames loaded from scene.4ds (it either doesn't work or crashes), and this way worked.
-        m_Scene->Release();
-        m_Scene = nullptr;
-
-        m_MissionPath = "";
-        m_IGraph->SetAppName("Scene Editor");
     }
+
+    m_Frames.clear();
+    m_CacheParts.clear();
+    m_Actors.clear();
+    m_Scripts.clear();
+    m_WebNodes.clear();
+    m_RoadWaypoints.clear();
+    m_RoadCrosspoints.clear();
+    m_AnimatedModels.clear();
+    m_LightmapObjects.clear();
+
+    m_ColManager.Clear();
+
+    g_ModelsMap.clear();
+    g_SoundsMap.clear();
+
+    // Scene close/release and path reset are handled by BaseEditor::Clear()
 }

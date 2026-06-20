@@ -1,0 +1,323 @@
+//------------------------------------------------
+// Mafia .chg (Differences/Change) File Format
+// 010 Editor Binary Template
+//
+// Reverse engineered from C_game::LoadDifferencesData (0x5AE480)
+// Engine: LS3D (Illusion Softworks / Mafia: The City of Lost Heaven)
+//------------------------------------------------
+
+RequiresVersion(9, 0);
+LittleEndian();
+
+//------------------------------------------------
+// Enums
+//------------------------------------------------
+
+typedef enum <uint32> {
+    FRAME_NULL      = 0,
+    FRAME_VISUAL    = 1,
+    FRAME_LIGHT     = 2,
+    FRAME_CAMERA    = 3,
+    FRAME_SOUND     = 4,
+    FRAME_SECTOR    = 5,
+    FRAME_DUMMY     = 6,
+    FRAME_TARGET    = 7,
+    FRAME_USER      = 8,
+    FRAME_MODEL     = 9,
+    FRAME_JOINT     = 10,
+    FRAME_VOLUME    = 11,
+    FRAME_OCCLUDER  = 12,
+    FRAME_SCENE     = 13,
+    FRAME_AREA      = 14,
+    FRAME_SHADOW    = 15,
+    FRAME_LANDSCAPE = 16,
+    FRAME_EMITOR    = 17
+} I3D_FRAME_TYPE;
+
+typedef enum <uint32> {
+    ACT_Hidden       = 1,
+    ACT_Player       = 2,   // Legacy, remapped to ACT_Human (27)
+    ACT_HumanBase    = 3,
+    ACT_Car          = 4,
+    ACT_Script       = 5,
+    ACT_Door         = 6,
+    ACT_Railway      = 8,
+    ACT_VillaObject  = 9,
+    ACT_Bottle       = 10,
+    ACT_Traffic      = 12,
+    ACT_Pedestrians  = 18,
+    ACT_Bridge       = 20,
+    ACT_Dog          = 21,
+    ACT_Airplane     = 22,
+    ACT_Turnout      = 24,
+    ACT_Pumper       = 25,
+    ACT_Human        = 27,
+    ACT_RaceCamera   = 28,
+    ACT_Wagon        = 30,
+    ACT_Irenka       = 31,
+    ACT_PublicPhysics = 32,
+    ACT_Shot         = 33,
+    ACT_Clock        = 34,
+    ACT_Physical     = 35,
+    ACT_Truck        = 36,
+    ACT_ItemDrop     = 37,
+    ACT_RailGenerator = 38
+} EActorType;
+
+typedef enum <uint16> {
+    CHUNK_ROOT              = 1234,
+    CHUNK_FRAME_DEFINITION  = 100,
+    CHUNK_ACTOR_ON_NEW      = 200,
+    CHUNK_ACTOR_ON_EXISTING = 400,
+    CHUNK_SCRIPT            = 500
+} ChunkID;
+
+//------------------------------------------------
+// Basic types
+//------------------------------------------------
+
+struct S_vector {
+    float x;
+    float y;
+    float z;
+};
+
+struct S_quat{
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+// Length-prefixed string (no null terminator on disk)
+typedef struct {
+    uint32 length;
+    if (length > 0)
+        char data[length];
+} LPString <read=data>;
+
+// Length-prefixed string with null terminator on disk (used by light sector links)
+typedef struct {
+    uint32 length;
+    char   data[length + 1];  // includes null terminator
+} LPStringZ <read=data>;
+
+//------------------------------------------------
+// Chunk header
+//------------------------------------------------
+
+typedef struct {
+    ChunkID id;
+    uint32  dataSize;  // size of data following this 6-byte header
+} ChunkHeader;
+
+//------------------------------------------------
+// Frame type-specific data
+//------------------------------------------------
+
+// FRAME_LIGHT (type 2) - Light source properties
+typedef struct {
+    uint32   lightType;
+    S_vector color;           // RGB color (3 floats)
+    float    range;
+    uchar    isOn;            // 0=off, 1=on
+    float    coneInner;       // inner cone angle
+    float    coneOuter;       // outer cone angle
+    float    falloffNear;     // specular/falloff inner
+    float    falloffFar;      // specular/falloff outer
+    uint32   lightMode;       // light mode flags
+    uint32   sectorLinkCount;
+
+    if (sectorLinkCount > 0) {
+        local int i;
+        for (i = 0; i < sectorLinkCount; i++) {
+            LPStringZ sectorName;
+        }
+    }
+} LightData;
+
+// FRAME_SOUND (type 4) - Sound emitter properties
+typedef struct {
+    LPString soundFileName;
+
+    // Sound parameters applied after loading
+    float    param0;          // applied via vtable SetX
+    uchar    isOn;            // 0=off, 1=on
+    float    soundParam1;     // frequency or similar
+    float    soundParam2;
+    float    soundParam3;
+    float    soundParam4;
+    float    rangeNear;
+    float    rangeFar;
+    float    coneAngle;
+    float    ambient;
+    uchar    loop;            // 0=no loop, 1=loop
+    float    volume;
+} SoundData;
+
+// FRAME_MODEL (type 9) - Model container
+typedef struct {
+    LPString modelFileName;
+} ModelData;
+
+//------------------------------------------------
+// Chunk 100 - Frame Definition
+//------------------------------------------------
+
+typedef struct {
+    local int64 chunkStart = FTell();
+
+    // Common frame data
+    I3D_FRAME_TYPE frameType;
+    S_vector       position;     // local matrix translation (x, y, z)
+    S_vector       scale;        // scale factors (x, y, z)
+    S_quat         rotation;     // rotation quaternion (x, y, z, w)
+    LPString       frameName;
+    LPString       parentName;   // if not found, scene primary sector is used
+
+    // Type-specific data
+    switch (frameType) {
+        case FRAME_LIGHT:
+            LightData lightData;
+            break;
+        case FRAME_SOUND:
+            SoundData soundData;
+            break;
+        case FRAME_MODEL:
+            ModelData modelData;
+            break;
+        default:
+            // Other frame types have no additional data in this format
+            local int64 remaining = chunkStart + (parentof(this).header.dataSize - 6) - FTell();
+            if (remaining > 0)
+                uchar unknownData[remaining];
+            break;
+    }
+} FrameDefinitionData;
+
+//------------------------------------------------
+// Chunk 200 - Actor on New Frame
+//------------------------------------------------
+
+typedef struct {
+    local int64 chunkStart = FTell();
+
+    EActorType actorType;  // if 2 (ACT_Player), remapped to 27 (ACT_Human) at runtime
+
+    // Actor-specific data follows (read by C_actor::LoadData virtual method)
+    // Format depends on actor type - shown as raw bytes
+    local int64 remaining = chunkStart + (parentof(this).header.dataSize - 6) - FTell();
+    if (remaining > 0)
+        uchar actorData[remaining];
+} ActorOnNewFrameData;
+
+//------------------------------------------------
+// Chunk 400 - Actor on Existing Frame
+//------------------------------------------------
+
+typedef struct {
+    LPString   frameName;   // name of existing frame to find
+    EActorType actorType;   // actor type to create and bind
+
+    // No additional actor data - actor gets default initialization via GameInit()
+    local int64 remaining = startof(this) + (parentof(this).header.dataSize - 6) - FTell();
+    if (remaining > 0)
+        uchar extraData[remaining];
+} ActorOnExistingFrameData;
+
+//------------------------------------------------
+// Chunk 500 - Script / Program
+//------------------------------------------------
+
+typedef struct {
+    // Contains one or more C_program entries
+    // Each is loaded via C_program::LoadSourceCode(C_chunk*)
+    // Format is opaque script bytecode
+    local int64 remaining = startof(this) + (parentof(this).header.dataSize - 6) - FTell();
+    if (remaining > 0)
+        char scriptCode[remaining];
+} ScriptData;
+
+//------------------------------------------------
+// Sub-chunk (wraps header + typed body)
+//------------------------------------------------
+
+typedef struct {
+    ChunkHeader header;
+    local int64 bodyStart = FTell();
+
+    switch (header.id) {
+        case CHUNK_FRAME_DEFINITION:
+            FrameDefinitionData frameData;
+            break;
+        case CHUNK_ACTOR_ON_NEW:
+            ActorOnNewFrameData actorData;
+            break;
+        case CHUNK_ACTOR_ON_EXISTING:
+            ActorOnExistingFrameData actorExistingData;
+            break;
+        case CHUNK_SCRIPT:
+            ScriptData scriptData;
+            break;
+        default:
+            if (header.dataSize > 0)
+                uchar rawData[header.dataSize];
+            break;
+    }
+
+    // Ensure we advance to the correct position even if parsing was short
+    local int64 expectedEnd = bodyStart + header.dataSize;
+    if (FTell() < expectedEnd) {
+        uchar _padding[expectedEnd - FTell()];
+    }
+    FSeek(expectedEnd);
+} SubChunk;
+
+//------------------------------------------------
+// Main
+//------------------------------------------------
+
+struct Node;
+
+local uint64 fileSize = FileSize();
+
+struct Node
+{
+    ChunkHeader header;
+
+    local uint pos = FTell(); // Track position for chunk boundary
+
+    switch(header.id)
+    {
+        case CHUNK_ROOT:
+        {
+            while(pos + (header.dataSize - 6) > FTell() && FTell() < fileSize)
+            {
+                Node node; // Nested nodes
+            }
+        }
+        break;
+
+        case CHUNK_FRAME_DEFINITION:
+            FrameDefinitionData frameData;
+            break;
+        case CHUNK_ACTOR_ON_NEW:
+            ActorOnNewFrameData actorData;
+            break;
+        case CHUNK_ACTOR_ON_EXISTING:
+            ActorOnExistingFrameData actorExistingData;
+            break;
+        case CHUNK_SCRIPT:
+            ScriptData scriptData;
+            break;
+
+        default:
+            local uint dataSize = header.dataSize;
+            local uint arraySize = dataSize - 6;
+            if(arraySize != 2667577340)
+                ubyte data[arraySize];
+        break;
+    }
+};
+
+Node file;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Windows.h>
+#include <lodepng.h>
 
 static HICON CreateIconFromPNG(const char* filename, int iconWidth, int iconHeight) {
     unsigned char* image = NULL;

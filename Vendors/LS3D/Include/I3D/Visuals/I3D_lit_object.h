@@ -3,6 +3,7 @@
 #include <LS3D.h>
 #include <I3D/Visuals/I3D_object.h>
 #include <I3D/I3D_scene.h>
+#include <IO/BinaryWriter.hpp>
 #include <IBManager.h>
 
 typedef enum LightmapType : uint8_t { LM_TYPE_VERTEX = 5, LM_TYPE_BITMAP = 6 } LightmapType;

@@ -1,0 +1,276 @@
+//------------------------------------------------
+// 010 Editor Binary Template
+// Mafia Replay Format (.rep)
+//
+// Converted from ImHex pattern by FOXAI Dev team
+// Original authors: Tushkan and Kardini
+// Based on Romop5 and GOLOD55 researches
+//------------------------------------------------
+
+LittleEndian();
+
+local uint32 gDataStartPos;
+
+// --- Basic types ---
+
+typedef struct {
+    float x, y, z;
+} Vector3 <read=ReadVector3>;
+
+string ReadVector3(Vector3 &v) {
+    string s;
+    SPrintf(s, "(%.3f, %.3f, %.3f)", v.x, v.y, v.z);
+    return s;
+}
+
+typedef struct {
+    float w, x, y, z;
+} Quaternion <read=ReadQuaternion>;
+
+string ReadQuaternion(Quaternion &q) {
+    string s;
+    SPrintf(s, "(%.3f, %.3f, %.3f, %.3f)", q.w, q.x, q.y, q.z);
+    return s;
+}
+
+// --- Object definition frame types ---
+
+typedef struct {
+    uint32 frameA;
+    uint32 type;
+    uint32 unk[6];
+} ObjectDefinitionFrameTypeUnk;
+
+typedef struct {
+    Vector3 position;
+    Quaternion rotation;
+    uint32 animationID;
+} ObjectDefinitionFrameTypeHumA;
+
+typedef struct {
+    Vector3 position;
+    Quaternion rotation;
+    uint32 animationID;
+    uint32 animationOffset; // Offset keyframes from start: x = (animationSpeed) & 0xfff
+} ObjectDefinitionFrameTypeHumB;
+
+typedef struct {
+    uint32 frameA;
+    uint32 type;
+    if (type == 1) {
+        ObjectDefinitionFrameTypeHumA _data;
+    } else if (type == 2) {
+        ObjectDefinitionFrameTypeHumB _data;
+    }
+} ObjectDefinitionFrameTypeHum;
+
+typedef struct {
+    uint32 frameA;
+    uint32 type;
+    Vector3 position;
+    Quaternion rotation;
+    uint32 unk1;
+    uint32 unk2;
+} ObjectDefinitionFrameTypeCar;
+
+typedef struct {
+    uint32 frameA;
+    uint32 type;
+    Vector3 position;
+    Quaternion rotation;
+    float unk1, unk2, unk3, unk4, unk5, unk6;
+    uint32 unk[8];
+} ObjectDefinitionFrameTypeAct;
+
+// --- Animation ---
+
+typedef struct {
+    uint32 animationID;
+    char animationName[48];
+} AnimationBlock <read=ReadAnimationBlock>;
+
+string ReadAnimationBlock(AnimationBlock &b) {
+    return b.animationName;
+}
+
+typedef struct {
+    uint32 countOfAnimationBlocks;
+    uint32 unknown;
+    if (countOfAnimationBlocks > 0)
+        AnimationBlock blocks[countOfAnimationBlocks];
+} AnimationBlockData;
+
+// --- Object definition block ---
+
+typedef struct {
+    char Name[36];
+    char NameTypeFlags[36];
+    uint64 chkData[2];
+    uint32 chkDataEmpty;
+    uint32 timeActivation;
+    uint32 definitionID;
+    uint32 size;
+    uint32 offset;
+
+    local int64 savedPos = FTell();
+    local uint32 dataId = gDataStartPos + offset + 8;
+    local int64 dataEnd = (int64)dataId + size - 40;
+
+    if (chkData[0] == 188978561032 && chkData[1] == 240518168632) {
+        // Car type
+        FSeek(dataId);
+        while (FTell() <= dataEnd) {
+            ObjectDefinitionFrameTypeCar carData;
+        }
+    } else if (chkData[0] == 171798691848 && chkData[1] == 240518168620) {
+        // Human type
+        FSeek(dataId);
+        while (FTell() <= dataEnd) {
+            ObjectDefinitionFrameTypeHum humData;
+        }
+    } else if (chkData[0] == 395136991240 && chkData[1] == 0) {
+        // Actor type
+        FSeek(dataId);
+        while (FTell() <= dataEnd) {
+            ObjectDefinitionFrameTypeAct actData;
+        }
+    } else if (chkData[0] == 68719476744 && chkData[1] == 0) {
+        // Unknown type
+        FSeek(dataId);
+        while (FTell() <= dataEnd) {
+            ObjectDefinitionFrameTypeUnk unkData;
+        }
+    } else {
+        // Raw fallback
+        if (size > 0) {
+            FSeek(gDataStartPos + offset);
+            char chankData[size];
+        }
+    }
+
+    FSeek(savedPos);
+} ObjectDefinitionBlock <read=ReadObjDefBlock>;
+
+string ReadObjDefBlock(ObjectDefinitionBlock &b) {
+    return b.Name;
+}
+
+// --- Camera ---
+
+typedef struct {
+    uint32 frameA_Chank;
+    uint32 frameB_Chank;
+    uint32 unkType;
+    float x, y, z;
+    float curveX, curveY, curveZ;
+    float subCurveX, subCurveY, subCurveZ;
+    float rollView;
+    float FOV;
+    char unk1[8];
+} CameraChank;
+
+typedef struct {
+    uint32 frameA_Focus;
+    uint32 frameB_Focus;
+    uint32 unkType;
+    float x, y, z;
+    float curveX, curveY, curveZ;
+    float subCurveX, subCurveY, subCurveZ;
+    char unk2[8];
+} CameraChankFocus;
+
+// --- Script/Fade/Dialog ---
+
+typedef struct {
+    uint32 unk1;
+    float fadeA, fadeB;
+    uint32 unk2;
+    char data[16];
+} ZatmizeData;
+
+typedef struct {
+    uint32 time;
+    char name[36];
+} ScriptsData;
+
+typedef struct {
+    uint32 time;
+    uint32 state;
+    char name[32];
+} WavData;
+
+typedef struct {
+    uint32 unkBlockSize;
+    uint32 zatmizeBlockSize;
+    uint32 scriptsSize;
+    uint32 wavSize;
+    if (zatmizeBlockSize > 0)
+        ZatmizeData zatmize[zatmizeBlockSize / 32];
+    if (scriptsSize > 0)
+        ScriptsData scripts[scriptsSize / 40];
+    if (wavSize > 0)
+        WavData wavs[wavSize / 40];
+} FadeScriptWavData;
+
+typedef struct {
+    uint32 timeA;
+    uint32 timeB;
+    char name[32];
+    uchar unk0;
+    uchar unk1;
+    uint16 unk2;
+} LastObject;
+
+typedef struct {
+    uint32 time;
+    uint32 charID;
+    uint32 stringID;
+    char name[24];
+} PreLastObject;
+
+typedef struct {
+    uint32 count;
+    uint32 unk;
+    uint32 size;
+    if (count > 0)
+        PreLastObject preObjects[count];
+    if (size > 0)
+        LastObject lastObjects[size];
+} PreLastData;
+
+// --- Header ---
+
+typedef struct {
+    uint32 magicByte;
+    uint32 sizeOfAnimationBlocks;
+    uint32 sizeOfObjectDefinitionsSection;
+    uint32 countOfObjectDefinitionBlocks;
+    uint32 fixedCCSequence;
+    uint32 countOfCameraChunks;
+    uint32 countOfCameraFocusChunks;
+    uint32 sizeOfScriptEventsSequence;
+    uint32 sizeOfDialogSection;
+    char padding[60];
+} Header;
+
+// ===== Parse file =====
+
+Header header;
+
+gDataStartPos = sizeof(header) + (108 * header.countOfObjectDefinitionBlocks + header.sizeOfAnimationBlocks);
+
+AnimationBlockData animationBlocksData;
+
+if (header.countOfObjectDefinitionBlocks > 0)
+    ObjectDefinitionBlock objectsDefinition[header.countOfObjectDefinitionBlocks] <optimize=false>;
+
+FSeek(gDataStartPos + header.sizeOfObjectDefinitionsSection);
+
+if (header.countOfCameraChunks > 0)
+    CameraChank cameraChank[header.countOfCameraChunks];
+
+if (header.countOfCameraFocusChunks > 0)
+    CameraChankFocus cameraChankFocus[header.countOfCameraFocusChunks];
+
+FadeScriptWavData fswData;
+PreLastData preLastData;

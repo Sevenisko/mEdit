@@ -155,6 +155,24 @@ public:
 		return qValue;
 	}
 
+	S_quat ReadQuatWXYZ() {
+		S_quat q;
+		q.w = ReadSingle();
+		q.x = ReadSingle();
+		q.y = ReadSingle();
+		q.z = ReadSingle();
+		return q;
+	}
+
+	S_quat ReadQuatXYZW() {
+		S_quat q;
+		q.x = ReadSingle();
+		q.y = ReadSingle();
+		q.z = ReadSingle();
+		q.w = ReadSingle();
+		return q;
+	}
+
 	S_matrix ReadMatrix() {
 		S_matrix mValue;
 		mValue.e[0] = ReadSingle();

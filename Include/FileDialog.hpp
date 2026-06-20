@@ -120,6 +120,9 @@ class FileDialog {
             if(!IsWindow(hwnd)) { break; }
         }
 
+        // Consume any lingering WM_QUIT so it doesn't affect subsequent message loops
+        PeekMessageA(&msg, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE);
+
         UnregisterClassA("FileDialogClass", GetModuleHandleA(nullptr));
         return m_Result.valid;
     }

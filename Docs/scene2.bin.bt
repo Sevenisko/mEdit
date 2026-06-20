@@ -1,0 +1,1033 @@
+struct Vector2
+{
+    float x;
+    float y;
+};
+
+struct Vector3
+{
+    float x;
+    float y;
+    float z;
+};
+
+typedef struct 
+{
+    float row[4];
+} Matrix[4];
+
+struct Quaternion
+{
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+struct Color
+{
+    float r;
+    float g;
+    float b;
+};
+
+struct ColorRGB
+{
+    ubyte r;
+    ubyte g;
+    ubyte b;
+};
+
+struct ColorRGBA
+{
+    ubyte r;
+    ubyte g;
+    ubyte b;
+    ubyte a;
+};
+
+struct MeshVertex
+{
+    Vector3 vertex;
+};
+
+struct MeshTriangleIndices
+{
+    ushort indices[3];
+};
+
+struct TrafficCar
+{
+    char vehicle[20];
+    float densityRatio;
+    byte color;
+    byte unk1;
+    byte unk2;
+    byte unk3;
+    byte police;
+    byte gangster0;
+    byte gangster1;
+    byte unk4;
+};
+
+struct PedestrianName
+{
+    char model[17];
+};
+
+struct PedestrianDensity
+{
+    uint densityRatio;
+};
+
+enum <ubyte> LightmapType
+{
+    Vertex = 5,
+    Bitmap
+};
+
+enum <uint> FrameType
+{
+    Visual = 1,
+    Light,
+    Point,
+    Sound,
+    BoundingBox = 6,
+    Model = 9,
+    Occluder = 12,
+    Geometry = 14
+};
+
+enum VisualType {
+    LitObject = 0x50414D4C,
+    Projector = 0x4A4F5250,
+    SingleMesh = 0x4D474E53,
+    Morph = 0x4850524D,
+    PartElementBase = 0x42545250,
+    Billboard = 0x44524242,
+    PartElement = 0x45545250,
+    Mirror = 0x5252494D,
+    LandPatch = 0x50444E4C,
+    SingleMorph = 0x524D4D53,
+    LensFlare = 0x534E454C,
+    Object = 0x5F4A424F
+};
+
+enum <uint> LightType
+{
+    PointL, SpotL, DirectionalL, AmbientL, FogL
+};
+
+enum <uint> SoundType
+{
+    PointS, AmbientS = 3
+};
+
+enum <uint> ActorType
+{
+    HiddenActor = 1,
+    Player,
+    Car = 4,
+    Script,
+    Door,
+    Railway = 8,
+    VillaObject,
+    Traffic = 12,
+    Pedestrians = 18,
+    Bridge = 20,
+    Dog,
+    Airplane,
+    Turnout = 24,
+    Pumper,
+    Human = 27,
+    RaceCamera,
+    Wagon = 30,
+    Clock = 34,
+    Physical, 
+    Truck
+};
+
+enum <uint> PhysicsType
+{
+    Stone, Crate, Barrel, TrashBin, TrafficSign, PaperBox, ConcreteT, MetalPlate, 
+    SmallWeapon0, SmallWeapon1, WoodenPlank, SmallMetal, BigWeapon, CarLight
+};
+
+enum <uint> Material
+{
+    Invalid, Asphalt, Pavement, Sidewalk, Concrete, Grass, Sand, 
+    Clay, Gravel, Rock, RailwayLine, Leaves, DoNotUse, Wood0, Wood30, 
+    Wood70 = 15, Parquet, Marble, Carpet, MetalConstruction, MetalPlate0, 
+    MetalPlate30, MetalPlate70, DoNotUse2, Glass, GlassUnbreakable, 
+    DoNotUse3, WiredFence, WoodenFence, Hedge, DoNotUse4, Universal, 
+    DoNotUse5, Body, Plaster, Junk, Bricks, DoNotUse6, DeadlyCollision, 
+    DestructibleCollision, Straw, Butter, SlippingWater, DirtyRoad
+};
+
+enum <uint> CharacterVoice
+{
+    Paulie, Sam, Salieri, Tommy, Frank, Luigi, Ralph, 
+    Vincenzo, Man, Salvatore, Cop0, Com1, PortGuard0, 
+    PortGuard1, PortGuard2, PortGuard3, PortGuard4, 
+    Enemy0, Enemy1, Enemy2, Enemy3, Enemy4, Hoolig, 
+    Sergio, Enemy5, Joe, PedMan0, PedMan1, PedMan2, 
+    PedWoman0, PedWoman1, PedWoman2, NoVoice, Lucas
+};
+
+enum <uint> Effect
+{
+    blood, hit_stonewall, hit_ground, hit_metal, hit_wood, 
+    night_chimney_smoke, Fire, Explosion, molotov_explosion, 
+    fire_small, explosion_big, molotov_fire, Thompson_muzzle_flash_day, 
+    Thompson_muzzle_flash_night, pistol_muzzle_flash_day, pistol_muzzle_flash_night, 
+    shotgun_muzzle_flash_day, shotgun_muzzle_flash_night, fireworks, pena, explosion_car, 
+    fire_fading, fire_small_fading, pena_ve_vane, smoke_cigarette, smoke_cigarette_breath, 
+    chcani, bliti, smoke_parnik, hit_grass, voda_prehrada, voda_prehrada_dole, 
+    listi_ze_stromu, prach_motorest, kour_restaurace, dollars, fontanka, 
+    zblunk, smoke_saliery, lighter, krev_vrtule, voda_vezeni, voda_vezeni2, 
+    hit_water, smoke_loco, steam_loco2, clun, steam_loco, explosion_hotel, 
+    gasoline, smoke_coffee, Explosion_hotel, Explosion_Morello, 
+    Dust_Morello, kola_na_vode, slow_smoke, spark_cig, Fire_no_smoke, 
+    smoke_cigarette_breath2, horici_benzin, FMVlighter, bloodSamFMV, 
+    FMV_Loko_sec, FMV_Loko_sec2, FMV_Loko_0, FMV_Loko_low, FMV_chladic, 
+    FMV_Expl_cisterna, FMV_lighter, FMV_gasoline, doutnik, 
+    kour_na_lokomotivu_NESAHAT, vol_dust, hovna, FMV_cigarette, 
+    dust_fall, kaluz_chuze, fire_cig, kour_lod_doprava, fireworks1, 
+    fireworks2, fireworks3, fireworks4, vlny, vlny_big, vlny_small, 
+    FMV_sirka, hydrant, kytka_listy, hadice, dymovnice, FMV_pistol_muzzle_flash
+};
+
+enum <ushort> NodeType
+{
+    Root = 0x4c53,
+    Description = 0x0001,
+    FileParams1 = 0xafff,
+    ClearColor = 0x3200,
+    CameraFov = 0x3010,
+    DrawDistance = 0x3011,
+    ClippingRange = 0x3211,
+    Frames = 0x4000,
+    Frame = 0x4010,
+    Type = 0x4011,
+    AltType = 0x4012,
+    Name = 0x0010,
+    Position = 0x0020,
+    Rotation = 0x0022,
+    Scale = 0x002d,
+    Position2 = 0x002c,
+    Parent = 0x4020,
+    ModelFile = 0x2012,
+    SectorParams = 0xb401,
+    Hidden = 0x4033,
+    Light_Def = 0x4040,
+    Light_Type = 0x4041,
+    Light_Color = 0x0026,
+    Light_Power = 0x4042,
+    Light_Cone = 0x4043,
+    Light_Radius = 0x4044,
+    Light_Flags = 0x4045,
+    Light_Sector = 0x4046,
+    BoundingBox_Def = 0x4050,
+    Sound_Def = 0x4060,
+    Sound_Type = 0x4061,
+    Sound_Volume = 0x4062,
+    Sound_OutVolume = 0x4063,
+    Sound_Cone = 0x4064,
+    Sound_Range = 0x4068,
+    Sound_Loop = 0x4066,
+    Sound_Enable = 0x4067,
+    Sound_Pitch = 0xb800,
+    Sound_Sector = 0xb200,
+    Occluder_Def = 0x4083,
+    VisualTypeChange = 0x4090,
+    Lightmap = 0x40a0,
+    LensFlare_Def = 0xb110,
+    LensFlare_Scale = 0xb112,
+    LensFlare_Alpha = 0xb113,
+    LensFlare_HideUpdateMs = 0xb114,
+    LensFlare_IncreaseStep = 0xb115,
+    LensFlare_DecreaseStep = 0xb116,
+    LensFlare_ShowUpdateMs = 0xb117,
+    Volume = 0xb151,
+    Actors = 0xae20,
+    Actor = 0xae21,
+    Actor_Name = 0xae23,
+    Actor_Type = 0xae22,
+    Actor_Data = 0xae24,
+    City = 0x01f4,
+    Part = 0x03e8,
+    City_Frame = 0x07d0,
+    Effects = 0x0064,
+    Emitter = 0x03e8,
+    FrameAnimations = 0xae02,
+    FrameAnimation = 0xae03,
+    RainSetup = 0xaef0,
+    NonRainFrames = 0xaef1,
+    WebPath = 0xae40,
+    RoadBin = 0xae41,
+    InitScripts = 0xae50,
+    InitScript = 0xae51
+};
+
+struct Node;
+
+local string aName = "";
+local ActorType aType = 0;
+
+ubyte CountSetBits(ubyte n) {
+    if (n == 0) return 0;
+    return (n & 1) + CountSetBits(n >> 1);
+}
+
+struct Node
+{
+    NodeType type;
+    uint size;
+
+    local uint pos = FTell();
+
+    switch(type)
+    {
+        case Root:
+        case Frames:
+        case Frame:
+        case Actors:
+        case Actor:
+        case Light_Def:
+        case Sound_Def:
+        case LensFlare_Def:
+        case City:
+        case FrameAnimations:
+        case Effects:
+        case InitScripts:
+        {
+            while(pos + (size - 6) > FTell())
+            {
+                Node node;
+            }
+        }
+        break;
+
+        case AltType:
+        {
+            VisualType visualType;
+        }
+        break;
+
+        case Parent:
+        {
+            NodeType parentType;
+            uint parentSize;
+
+            string parentName;
+        }
+        break;
+
+        case SectorParams:
+        {
+            while(pos + (size - 6) > FTell())
+            {
+                struct SPNode
+                {
+                    ushort type;
+                    uint size;
+
+                    switch(type)
+                    {
+                        case 0x0000:
+                            float unknown;
+                        break;
+
+                        case 0x0001:
+                            float unknown;
+                        break;
+
+                        case 0x0002:
+                            uint unknown;
+                        break;
+
+                        case 0x0003:
+                            float unknown;
+                        break;
+
+                        case 0x0004:
+                            float unknown;
+                        break;
+
+                        case 0x0005:
+                            uint unknown;
+                        break;
+
+                        case 0x0006:
+                            float unknown;
+                        break;
+
+                        case 0x0007:
+                            uint unknown;
+                        break;
+
+                        case 0x0008:
+                            float unknown;
+                        break;
+
+                        case 0x0009:
+                            float unknown;
+                        break;
+
+                        case 0x000a:
+                            float unknown;
+                        break;
+
+                        case 0x000b:
+                            float unknown;
+                        break;
+
+                        case 0x000c:
+                            uint unknown;
+                        break;
+
+                        case 0x000d:
+                            uint unknown;
+                        break;
+
+                        case 0x000e:
+                            uint unknown;
+                        break;
+
+                        case 0x000f:
+                            uint unknown;
+                        break;
+
+                        case 0x0010:
+                            uint unknown;
+                        break;
+
+                        case 0x0011:
+                            float unknown;
+                        break;
+
+                        case 0x0012:
+                            float unknown;
+                        break;
+
+                        case 0x0013:
+                            float unknown;
+                        break;
+
+                        case 0x0014:
+                            float unknownX;
+                            float unknownY;
+                            float unknownZ;
+                        break;
+
+                        case 0x0015:
+                            float unknownX;
+                            float unknownY;
+                            float unknownZ;
+                        break;
+
+                    }
+                } node;
+            }
+        }
+        break;
+
+        case Hidden:
+
+        break;
+
+        case Description:
+        {
+            ushort major;
+            ushort minor;
+            string description;
+            byte unknown;
+        }
+        break;
+
+        case FileParams1:
+        {
+            ushort unknown1;
+            ushort unknown2;
+            uint unknown3;
+        }
+        break;
+
+        case ClearColor:
+        {
+            float r;
+            float g;
+            float b;
+        }   
+        break;
+
+        case CameraFov:
+            float fov;
+        break;
+
+        case DrawDistance:
+            float drawDistance;
+        break;
+
+        case ClippingRange:
+        {
+            float nearPlane;
+            float farPlane;
+        }
+        break;
+
+        case Type:
+            FrameType frameType;
+        break;
+
+        case Name:
+            string name;
+        break;
+
+        case ModelFile:
+            string model;
+        break;
+            
+        case Position:
+            Vector3 pos;
+        break;
+
+        case Rotation:
+            Quaternion rot;
+        break;
+
+        case Scale:
+            Vector3 scale;
+        break;
+
+        case Position2:
+            Vector3 pos2;
+        break;
+
+        case Light_Type:
+            LightType type;
+        break;
+
+        case Light_Color:
+            Color color;
+        break;
+
+        case Light_Power:
+            float power;
+        break;
+
+        case Light_Cone:
+        {
+            float innerAngle;
+            float outerAngle;
+        }
+        break;
+
+        case Light_Radius:
+        {
+            float innerRadius;
+            float outerRadius;
+        }
+        break;
+
+        case Light_Flags:
+            uint flags;
+        break;
+
+        case Light_Sector:
+            string sectorName;
+        break;
+
+        case BoundingBox_Def:
+        {
+            Vector3 min;
+            Vector3 max;
+        }
+        break;
+
+        case Sound_Type:
+            SoundType type;
+        break;
+
+        case Sound_Volume:
+            float volume;
+        break;
+
+        case Sound_OutVolume:
+            float outVolume;
+        break;
+
+        case Sound_Cone:
+            float coneMin;
+            float coneMax;
+        break;
+
+        case Sound_Range:
+        {
+            float innerRadius;
+            float outerRadius;
+            float innerFalloff;
+            float outerFalloff;
+        }
+        break;
+
+        case Sound_Loop:
+        break;
+
+        case Sound_Enable:
+        break;
+ 
+        case Sound_Pitch:
+            float pitch;
+        break;
+
+        case Sound_Sector:
+            string sectorName;
+        break;
+
+        case Occluder_Def:
+        case Volume:
+        {
+            uint numVertices;
+            MeshVertex vertices[numVertices];
+            uint numTris;
+            MeshTriangleIndices tris[numTris];
+        }
+        break;
+
+        case VisualTypeChange:
+            VisualType newVisualType;
+        break;
+
+        case LensFlare_Scale:
+            float scale;
+        break;
+
+        case LensFlare_Alpha:
+            float alpha;
+        break;
+
+        case LensFlare_HideUpdateMs:
+            float hideUpdateTimeMs;
+        break;
+
+        case LensFlare_IncreaseStep:
+            float increaseStep;
+        break;
+
+        case LensFlare_DecreaseStep:
+            float decreaseStep;
+        break;
+
+        case LensFlare_ShowUpdateMs:
+            float showUpdateTimeMs;
+        break;
+
+        case Actor_Name:
+            string actorName;
+            aName = actorName;
+        break;
+
+        case Actor_Type:
+            ActorType actorType;
+            aType = actorType;
+        break;
+
+        case Actor_Data:
+        {
+            switch(aType)
+            {
+                case Player:
+                {
+                    byte unknown;
+                    uint characterType;
+                    CharacterVoice voice;
+                    float strength;
+                    float energy;
+                    float leftHandEnergy;
+                    float rightHandEnergy;
+                    float leftLegEnergy;
+                    float rightLegEnergy;
+                    float reactions;
+                    float speed;
+                    float aggresivity;
+                    float intelligence;
+                    float shooting;
+                    float sight;
+                    float hearing;
+                    float driving;
+                    float mass;
+                    float morale;
+                }
+                break;
+                
+                case Script:
+                {
+                    byte unk1;
+                    uint enableSpatialDetector;
+                    byte unk2;
+                    uint unk3;
+                    int numChars;
+                    char script[numChars];
+                }
+                break;
+
+                case Door:
+                {
+                    uint unk1;
+                    byte unk2;
+                    byte openInBothDirections;
+                    byte forcedOpenDirection;
+                    float openAngle;
+                    byte opened;
+                    byte locked;
+                    float openSpeed;
+                    float closeSpeed;
+                    char openSound[16];
+                    char closeSound[16];
+                    char lockedSound[16];
+                    byte unk3;
+                }
+                break;
+
+                case Railway:
+                {
+                    byte unk1;
+                    uint wagonCount;
+                    float wagonDistance;
+                    float unk2;
+                    float maxSpeed;
+                    float unk3;
+                    float unk4;
+                }
+                break;
+
+                case VillaObject:
+                {
+                    uint unk1;
+                    float unk2;
+                    float unk3;
+                    float unk4;
+                    float unk5;
+                    byte unk6;
+                    byte unk7;
+                    byte unk8;
+                    byte unk9;
+                }
+                break;
+
+                case Traffic:
+                {
+                    uint unk;
+                    float despawnRadius;
+                    float innerSpawnRadius;
+                    float outerSpawnRadius;
+                    uint maxCarsCount;
+                    uint carsCount;
+                    TrafficCar cars[carsCount];
+                }
+                break;
+
+                case Pedestrians:
+                {
+                    uint unk1;
+                    byte unk2;
+                    float spawnRadius;
+                    float despawnRadius;
+                    float innerSpawnRadius;
+                    float outerSpawnRadius;
+                    float innerSpawnRadius2;
+                    uint maxPedsCount;
+                    uint pedsCount;
+                    PedestrianName pedModels[pedsCount];
+                    PedestrianDensity pedDensities[pedsCount];
+                }
+                break;
+
+                case Dog:
+                {
+                    byte unk1;
+                    float walkSpeed;
+                    float runSpeed;
+                    float runAcceleration;
+                    float energy;
+                    uint32 unk2;
+                    uint32 unk3;
+                    uint32 unk4;
+                    uint32 unk5;
+                    uint32 unk6;
+                    float damage;
+                    float attackRadius;
+                    byte attackOnStart;
+                }
+                break;
+
+                case Airplane:
+                {
+                    byte unk1;
+                    float unk2;
+                    float unk3;
+                    float unk4;
+                    float unk5;
+                    float unk6;
+                    float unk7;
+                    uint unk8;
+                    uint unk9;
+                    uint unk10;
+                    float unk11;
+                    float unk12;
+                    float unk13;
+                    float unk14;
+                    float unk15;
+                    uint unk16;    
+                    uint unk17;
+                    float unk18;
+                    float unk19;               
+                }
+                break;
+
+                case Turnout:
+                {
+                    ushort unk1;
+                    float turnAngle;
+                    float turnSpeed;
+                    uint unk2;
+                    uint navPointID0;
+                    uint navPointID1;
+                    uint navPointID2;
+                    char turnoutFrame0[32];
+                    char turnoutFrame1[32];
+                }
+                break;
+
+                case Pumper:
+                {
+                    byte unk1;
+                    uint unk2;
+                    uint unk3;
+                    uint unk4;
+                    uint unk5;
+                    uint unk6;
+                    uint unk7;
+                    uint unk8;
+                    uint unk9;
+                    uint unk10;
+                    uint unk11;
+                }
+                break;  
+
+                case Human:
+                {
+                    byte unk1;
+                    uint characterType;
+                    CharacterVoice voice;
+                    float strength;
+                    float energy;
+                    float leftHandEnergy;
+                    float rightHandEnergy;
+                    float leftLegEnergy;
+                    float rightLegEnergy;
+                    float reactions;
+                    float speed;
+                    float aggresivity;
+                    float intelligence;
+                    float shooting;
+                    float sight;
+                    float hearing;
+                    float driving;
+                    float mass;
+                    float morale;
+                    byte unk2;
+                    byte unk3;
+                    uint unk4;
+                    int numChars;
+                    char script[numChars];
+                }
+                break;
+
+                case RaceCamera:
+                {
+                    byte unk1;
+                    byte unk2;
+                    byte unk3;
+                    byte unk4;
+                    float unk5;
+                    float unk6;
+                    float unk7;
+                    uint unk8;
+                    uint unk9;
+                }
+                break;
+
+                case Physical:
+                {
+                    byte unk1;
+                    byte collide;
+                    float unk2;
+                    float unk3;
+                    float mass;
+                    float friction;
+                    float unk4;
+                    PhysicsType sound;
+                    byte unk5;
+                    Material hitMaterial;
+                }
+                break;
+
+                default:
+                    byte data[size - 6];
+                break;
+            }
+        }
+        break;
+
+        case City:
+        {
+            uint version;
+
+            while(pos + (size - 6) > FTell())
+            {
+                Node node;
+            }
+        }
+        break;
+
+        case Part:
+        {
+            int numChars;
+            char name[numChars];
+            Vector2 pos;
+            float radius;
+            Vector2 leftBottomCorner;
+            Vector2 leftSide;
+            Vector2 rightBottomCorner;
+            Vector2 rightSide;
+            Vector2 leftTopCorner;
+            Vector2 bottomSide;
+            Vector2 rightTopCorner;
+            Vector2 topSide;
+
+            while(pos + (size - 6) > FTell())
+            {
+                Node node;
+            }
+        }
+        break;
+
+        case City_Frame:
+        {
+            int numChars;
+            char name[numChars];
+            Vector3 pos;
+            Quaternion rot;
+            Vector3 scale;
+            uint unk;
+            Vector3 scale2;
+        }
+        break;
+
+        case Emitter:
+        {
+            Matrix matrix;
+            Effect effect;
+        }
+        break;
+
+        case InitScript:
+        {
+            byte unk;
+            int numCharsName;
+            char name[numCharsName];
+            int numCharsScript;
+            char script[numCharsScript];
+        }
+        break;
+
+        case FrameAnimation:
+            ushort unk1;
+            float unk2;
+            float unk3;
+            int numChars;
+            char frame[numChars];
+        break;
+
+        case Lightmap:
+            ubyte numLevels;
+
+            local ubyte actualNumLevels = CountSetBits(numLevels);
+
+            struct LightmapLevel {
+                ubyte version;
+                LightmapType type;
+                uint numLODs;
+                float texelsPerUnit;
+                float range;
+                byte level;
+
+                struct LightmapLOD {
+                    ushort numMeshVertices;
+
+                    if(type == Bitmap) {
+                        ushort numBitmaps;
+                        ushort numFaceGroups;
+
+                        struct Bitmap {
+                            ubyte bitmapType;
+                            if(bitmapType) {
+                                ColorRGBA color;
+                                uint bitmapFormat;
+                                uint bitmapWidth;
+                                uint bitmapHeight;
+                            } else {
+                                uint bitmapFormat;
+                                uint bitmapWidth;
+                                uint bitmapHeight;
+                                ColorRGB pixels[bitmapWidth * bitmapHeight] <optimize=false>;
+                            }
+                        } bitmaps[numBitmaps] <optimize=false>;
+
+                        uint numUVs;
+                        Vector2 UVs[numUVs] <optimize=false>;
+                        
+                        struct LinkCoord {
+                            ushort origVertexIndex;
+                            ushort bitmapIndex;
+                        } linkCoordsWithBitmaps[numUVs] <optimize=false>;
+
+                        uint numIndices;
+                        MeshTriangleIndices faces[numIndices / 3] <optimize=false>;
+
+                        struct FaceMap {
+                            uint numFaces;
+                            ushort bitmapIndices[numFaces] <optimize=false>;
+                        } faceMaps[numFaceGroups] <optimize=false>;
+                    } else if (type == Vertex) {
+                        uint numColors;
+                        ColorRGBA colorOfVertices[numColors] <optimize=false>;
+                    }
+                } LODs[numLODs] <optimize=false>;
+            } levels[actualNumLevels]<optimize=false>;
+        break;
+
+        case WebPath:
+            int numCharsName;
+            char fileName[numCharsName];
+        break;
+
+        case RoadBin:
+            int numCharsName;
+            char fileName[numCharsName];
+        break;
+
+        default:
+            local uint dataSize = size;
+
+            local uint arraySize = dataSize - 6;
+
+            if(arraySize != 2667577340)
+                ubyte data[arraySize];
+        break;
+    }
+};
+
+Node file;

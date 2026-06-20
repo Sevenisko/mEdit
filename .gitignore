@@ -9,6 +9,9 @@ out/
 # VS Code stuff
 .vscode/
 
+# Claude Code stuff
+.claude/
+
 # Output directories
 /[Ll]ib/
 /[Bb]in/
